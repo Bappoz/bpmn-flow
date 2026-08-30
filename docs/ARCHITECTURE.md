@@ -95,11 +95,27 @@ Variáveis vivem por escopo: processo, subprocesso e instância de multi-instân
 formam uma cadeia. Leitura sobe a cadeia, escrita vai para quem já define a
 variável (senão para o processo), e `ctx.setLocal()` força o escopo atual.
 
-Avaliação de condições: expressões de fluxo são parte de uma definição confiável
-e são avaliadas como JavaScript sobre as variáveis visíveis no escopo. Um
-identificador desconhecido lê como `undefined` (um `Proxy` cobre o `with`), e
-uma expressão que lança é tratada como `false` (fail-closed), de modo que um
-guard malformado nunca derruba a execução.
+Avaliação de condições: as expressões do diagrama são avaliadas sobre as
+variáveis visíveis no escopo, em um de dois modos (`EngineOptions.expressions`).
+
+O padrão é `safe` (`engine/safe-expression.ts`): a expressão é tokenizada,
+transformada em árvore por um parser de precedência e interpretada. Nada é
+compilado, então um diagrama de origem desconhecida — o caso do servidor, que
+aceita XML por HTTP — não alcança o processo. O alcance de uma chamada é
+delimitado por duas allowlists: os globais expostos membro a membro (`Math`,
+`JSON`, `Number`, `Array.isArray`, ...) e os métodos de consulta chamáveis sobre
+um valor das variáveis. Leitura de propriedade é livre, exceto os nomes que
+voltam para código (`constructor`, `prototype`, `__proto__`, `call`, `apply`,
+`bind`). Não há atribuição, `new`, função anônima nem statement.
+
+O modo `javascript` compila a expressão com `new Function` e avalia sobre um
+`Proxy` que cobre o `with`. Ele confia na definição tanto quanto no código ao
+redor, e por isso é opt-in.
+
+Em ambos, um identificador desconhecido lê como `undefined` e uma expressão que
+lança — ou que o modo seguro recusa — é tratada como `false` (fail-closed), de
+modo que um guard malformado nunca derruba a execução. `validateBpmn` sinaliza
+com `warning` a expressão que o modo seguro não consegue ler.
 
 ### Viewer (`@bpmn-flow/viewer`)
 

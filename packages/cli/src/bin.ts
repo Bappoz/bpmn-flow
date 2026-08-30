@@ -19,6 +19,8 @@ Options for run:
   --retry <n>        retry a failing handler n times before giving up
   --state <file>     continue a run stored with --save
   --save <file>      write the execution state when it pauses
+  --js-expressions   evaluate expressions as full JavaScript instead of through
+                     the safe evaluator (only for diagrams you trust)
 `;
 
 /** Reads `--name value` or `--name=value`. */
@@ -80,6 +82,7 @@ async function main(): Promise<number> {
         ...(handlers ? { handlers } : {}),
         ...(argv.includes('--incidents') ? { onHandlerError: 'incident' as const } : {}),
         ...(retries ? { retry: { attempts: Number(retries) } } : {}),
+        ...(argv.includes('--js-expressions') ? { expressions: 'javascript' as const } : {}),
         ...(stateFile
           ? { state: JSON.parse(await readFile(stateFile, 'utf8')) as EngineState }
           : {}),

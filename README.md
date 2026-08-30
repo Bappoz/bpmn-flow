@@ -27,6 +27,7 @@ que o motor implementa.
 - [Visualização interativa](#visualização-interativa)
 - [Playground](#playground)
 - [Servidor HTTP e API REST](#servidor-http-e-api-rest)
+- [Expressões e confiança](#expressões-e-confiança)
 - [Padrões BPMN suportados](#padrões-bpmn-suportados)
 - [Limitações conhecidas](#limitações-conhecidas)
 - [Desenvolvimento](#desenvolvimento)
@@ -403,7 +404,9 @@ bpmn-flow run      processo.bpmn --vars '{"valor":2500}'
 ```
 
 `run` aceita `--mode auto`, `--save estado.json` e `--state estado.json`, então
-dá para pausar uma execução e retomá-la depois. Detalhes em
+dá para pausar uma execução e retomá-la depois. `--js-expressions` troca o
+avaliador seguro pela linguagem inteira, para diagramas próprios (ver
+[Expressões e confiança](#expressões-e-confiança)). Detalhes em
 [`packages/cli`](packages/cli/README.md).
 
 ## Servidor HTTP e API REST
@@ -433,6 +436,48 @@ Endpoints principais:
 
 Com `--data <dir>` cada sessão é gravada em disco e reconstruída sob demanda, de
 modo que reiniciar o servidor não perde execuções em andamento.
+
+O XML que chega pela API é tratado como não confiável: as expressões do diagrama
+passam pelo avaliador seguro, como descrito a seguir.
+
+## Expressões e confiança
+
+Condição de fluxo, cardinalidade, condição de conclusão e mapeamento de dados
+são expressões que vêm dentro do diagrama. Por padrão elas passam por um
+**avaliador seguro**: um subconjunto de JavaScript que é lido, transformado em
+árvore e interpretado — nunca compilado. Não há `eval` nem `new Function` no
+caminho.
+
+```
+valor > 1000 && cliente.plano === "premium"
+itens.length > 2 ? "lote" : "simples"
+Math.max(a, b) === 5
+pedido.entrega?.prazo === undefined
+```
+
+Só existem os globais que a allowlist expõe (`Math`, `JSON`, `Number`,
+`Array.isArray`, `Object.keys/values/entries`, `Date.now`, `String`, `Boolean`,
+`parseInt`, `parseFloat`) e, sobre os seus próprios dados, os métodos de
+consulta (`includes`, `indexOf`, `slice`, `join`, `toLowerCase`, ...).
+`process`, `globalThis`, `require` e `Function` não existem para uma expressão;
+`constructor` e `__proto__` são recusados; não há atribuição, `new`, função
+anônima nem statement — uma expressão também não consegue escrever nas
+variáveis do processo. Por isso `POST /api/sessions` pode receber XML de
+qualquer origem sem que uma condição execute código no servidor.
+
+Uma expressão que o avaliador não entende vale `undefined`, e como condição vale
+`false`. Para descobrir isso antes de executar, `validateBpmn` reporta uma issue
+de severidade `warning` para cada expressão fora do subconjunto.
+
+Quem escreve os próprios diagramas e quer a linguagem inteira liga o modo
+JavaScript, que confia na definição tanto quanto no código ao redor:
+
+```ts
+new WorkflowEngine(processo, { expressions: 'javascript' });
+
+// No servidor a escolha é de quem sobe o processo, nunca do request:
+createApp({ expressions: 'javascript' });
+```
 
 ## Padrões BPMN suportados
 
@@ -467,9 +512,11 @@ modo que reiniciar o servidor não perde execuções em andamento.
 
 - **Ciclos de timer repetem só em evento de borda não interrompente**
   (`R3/PT1H` = três lembretes), que é onde repetir faz sentido.
-- **Expressões de condição são avaliadas como JavaScript** sobre as variáveis do
-  processo, assumindo que a definição do diagrama é confiável. Variável
-  inexistente lê como `undefined`; expressão que lança é tratada como `false`.
+- **Expressões são um subconjunto de JavaScript**: o avaliador seguro não tem
+  função anônima, atribuição, `new` nem chamada fora da allowlist, então uma
+  condição que dependa disso precisa do modo `expressions: 'javascript'` (só
+  para diagramas próprios). Variável inexistente lê como `undefined`; expressão
+  que lança, ou que o avaliador recusa, é tratada como `false`.
 - **`ioSpecification` formal não é interpretado**: o mapeamento de dados é lido
   na forma `assignment/from/to`.
 - **Correlação de mensagem por chave** não existe; a entrega é por nome da

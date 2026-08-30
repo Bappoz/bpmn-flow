@@ -92,6 +92,11 @@ Opções:
   para testar sem esperar.
 - `variables`: variáveis iniciais do processo.
 - `maxSteps`: limite de transições (proteção contra loops infinitos).
+- `expressions`: `"safe"` (padrão) interpreta as expressões do diagrama num
+  subconjunto de JavaScript, com globais em allowlist e sem compilar código —
+  seguro para diagrama de origem desconhecida; `"javascript"` compila com
+  `new Function` e libera a linguagem inteira, confiando na definição tanto
+  quanto no código ao redor.
 
 Métodos:
 
