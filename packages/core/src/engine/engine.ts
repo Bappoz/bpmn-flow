@@ -48,6 +48,8 @@ interface Scope {
   variables: Record<string, unknown>;
   /** Set on scopes created for one instance of a loop/multi-instance activity. */
   loopId?: string;
+  /** Position of this instance in the loop, `0`-based. Set with `loopId`. */
+  loopIndex?: number;
   /** Data-mapped scopes do not read the caller's variables. */
   isolated?: boolean;
   /** Ad-hoc subprocess: activities not started yet. */
@@ -80,6 +82,12 @@ interface LoopRun {
   total: number;
   started: number;
   completed: number;
+  /**
+   * Output of each finished instance, tagged with the instance it came from.
+   * Instances of a parallel run finish in any order, so the index is what keeps
+   * the aggregated collection aligned with the input collection.
+   */
+  results: { index: number; value: unknown }[];
   instanceScopes: Set<Scope>;
 }
 
@@ -459,6 +467,7 @@ export class WorkflowEngine {
         ...(scope.hostNodeId ? { hostNodeId: scope.hostNodeId } : {}),
         ...(scope.parentToken ? { parentTokenId: scope.parentToken.id } : {}),
         ...(scope.loopId ? { loopId: scope.loopId } : {}),
+        ...(scope.loopIndex !== undefined ? { loopIndex: scope.loopIndex } : {}),
         ...(scope.isolated ? { isolated: true } : {}),
         ...(scope.adHocPending ? { adHocPending: [...scope.adHocPending] } : {}),
         variables: { ...scope.variables },
@@ -492,6 +501,7 @@ export class WorkflowEngine {
         total: run.total,
         started: run.started,
         completed: run.completed,
+        results: run.results.map((result) => ({ ...result })),
         instanceScopeIds: [...run.instanceScopes].map((scope) => scope.id),
       })),
     };
@@ -568,6 +578,7 @@ export class WorkflowEngine {
         ...(parentScope && !stored.isolated ? { parentScope } : {}),
         ...(stored.hostNodeId ? { hostNodeId: stored.hostNodeId } : {}),
         ...(stored.loopId ? { loopId: stored.loopId } : {}),
+        ...(stored.loopIndex !== undefined ? { loopIndex: stored.loopIndex } : {}),
         ...(stored.isolated ? { isolated: true } : {}),
         ...(stored.adHocPending ? { adHocPending: [...stored.adHocPending] } : {}),
       };
@@ -658,6 +669,7 @@ export class WorkflowEngine {
         total: stored.total,
         started: stored.started,
         completed: stored.completed,
+        results: (stored.results ?? []).map((result) => ({ ...result })),
         instanceScopes: new Set(
           stored.instanceScopeIds
             .map((id) => scopesById.get(id))
@@ -1393,6 +1405,7 @@ export class WorkflowEngine {
       total,
       started: 0,
       completed: 0,
+      results: [],
       instanceScopes: new Set(),
     };
     this.loops.set(run.id, run);
@@ -1423,6 +1436,7 @@ export class WorkflowEngine {
       parentScopeId: run.scope.id,
       hostNodeId: run.nodeId,
       loopId: run.id,
+      loopIndex: index,
       variables,
       tokens: new Set(),
     };
@@ -1466,13 +1480,33 @@ export class WorkflowEngine {
     else this.finishLoop(run);
   }
 
-  /** Appends the instance's output variable to the aggregated collection. */
+  /**
+   * Aggregates the instance's output variable into the output collection.
+   *
+   * The specification asks for positional correspondence between input and
+   * output collection: the result of the instance that ran over `itens[2]`
+   * belongs at `resultados[2]`. Appending on completion breaks that as soon as
+   * a parallel run finishes out of order, so the result is stored under the
+   * instance index and the whole collection is rebuilt in index order.
+   *
+   * The rebuilt array is dense: an instance cancelled by a completion condition
+   * never contributes, instead of leaving a hole (an instance that produced
+   * `undefined` still occupies its slot).
+   */
   private collectLoopOutput(run: LoopRun, instanceScope: Scope): void {
     const { outputCollection, outputElement } = run.loop;
     if (!outputCollection || !outputElement) return;
-    const collected = this.readVariable(run.scope, outputCollection);
-    if (!Array.isArray(collected)) return;
-    collected.push(this.readVariable(instanceScope, outputElement));
+    if (!Array.isArray(this.readVariable(run.scope, outputCollection))) return;
+    run.results.push({
+      index: instanceScope.loopIndex ?? run.results.length,
+      value: this.readVariable(instanceScope, outputElement),
+    });
+    const ordered = [...run.results].sort((a, b) => a.index - b.index);
+    this.writeVariable(
+      run.scope,
+      outputCollection,
+      ordered.map((result) => result.value),
+    );
   }
 
   /** Every instance is done (or was cancelled): the activity itself completes. */
