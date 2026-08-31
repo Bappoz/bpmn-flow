@@ -21,15 +21,16 @@ bpmn-flow run      processo.bpmn   # executa e diz onde parou
 
 ### `run`
 
-| Opção               | Efeito                                                       |
-| ------------------- | ------------------------------------------------------------ |
-| `--vars <json>`     | Variáveis iniciais, por exemplo `'{"valor":2500}'`.          |
-| `--mode <modo>`     | `automation` (padrão, pausa em tarefa de usuário) ou `auto`. |
-| `--handlers <file>` | Módulo ES que exporta por padrão `{ nodeId: handler }`.      |
-| `--incidents`       | Segura a atividade que falhou em vez de derrubar a execução. |
-| `--retry <n>`       | Tenta o handler mais `n` vezes antes de desistir.            |
-| `--save <file>`     | Grava o estado da execução quando ela pausa.                 |
-| `--state <file>`    | Continua a execução gravada por `--save`.                    |
+| Opção               | Efeito                                                                    |
+| ------------------- | ------------------------------------------------------------------------- |
+| `--vars <json>`     | Variáveis iniciais, por exemplo `'{"valor":2500}'`.                       |
+| `--mode <modo>`     | `automation` (padrão, pausa em tarefa de usuário) ou `auto`.              |
+| `--handlers <file>` | Módulo ES que exporta por padrão `{ nodeId: handler }`.                   |
+| `--incidents`       | Segura a atividade que falhou em vez de derrubar a execução.              |
+| `--retry <n>`       | Tenta o handler mais `n` vezes antes de desistir.                         |
+| `--save <file>`     | Grava o estado da execução quando ela pausa.                              |
+| `--state <file>`    | Continua a execução gravada por `--save`.                                 |
+| `--js-expressions`  | Avalia as expressões como JavaScript completo (só em diagrama confiável). |
 
 Um arquivo de automação é um módulo comum:
 

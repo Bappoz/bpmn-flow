@@ -5,6 +5,7 @@ import {
   type EngineMode,
   type EngineState,
   type ExecutionSnapshot,
+  type ExpressionMode,
   type FlowNode,
   type PendingTask,
   type ProcessModel,
@@ -31,6 +32,11 @@ export interface RunOptions {
   onHandlerError?: 'fail' | 'incident';
   /** Automatic retries before giving up on a handler. */
   retry?: { attempts?: number; delay?: string };
+  /**
+   * Evaluate the diagram's expressions as full JavaScript instead of through
+   * the safe evaluator. Only for a diagram you trust as much as your own code.
+   */
+  expressions?: ExpressionMode;
 }
 
 export interface RunResult extends CommandResult {
@@ -103,9 +109,13 @@ export async function run(xml: string, options: RunOptions = {}): Promise<RunRes
   if (!process) throw new Error('No executable process found in the diagram.');
 
   const engine = options.state
-    ? WorkflowEngine.restore(process, options.state, { processes: model.processes })
+    ? WorkflowEngine.restore(process, options.state, {
+        processes: model.processes,
+        ...(options.expressions ? { expressions: options.expressions } : {}),
+      })
     : new WorkflowEngine(process, {
         processes: model.processes,
+        ...(options.expressions ? { expressions: options.expressions } : {}),
         ...(options.mode ? { mode: options.mode } : {}),
         ...(options.variables ? { variables: options.variables } : {}),
         ...(options.onHandlerError ? { onHandlerError: options.onHandlerError } : {}),

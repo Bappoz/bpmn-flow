@@ -28,7 +28,8 @@ export type {
 } from './engine/state.js';
 export { BpmnError, HandlerRegistry } from './engine/handlers.js';
 export type { HandlerContext, TaskHandler, HandlerSelector } from './engine/handlers.js';
-export { evaluateCondition, evaluateExpression } from './engine/expression.js';
+export { evaluateCondition, evaluateExpression, isSafeExpression } from './engine/expression.js';
+export type { ExpressionMode } from './engine/expression.js';
 export { Emitter } from './engine/emitter.js';
 export type {
   ActivityMetrics,

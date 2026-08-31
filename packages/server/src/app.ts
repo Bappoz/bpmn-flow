@@ -23,6 +23,12 @@ export interface AppOptions {
    * `*`. Without them, automatic activities pass through.
    */
   handlers?: SessionStoreOptions['handlers'];
+  /**
+   * How the expressions of a posted diagram are evaluated. Left alone, they go
+   * through the safe evaluator: the API accepts XML from anyone, so a flow
+   * condition must not be able to run code in this process.
+   */
+  expressions?: SessionStoreOptions['expressions'];
 }
 
 /** Storage and automation for the default session store. */
@@ -30,6 +36,7 @@ export function storeOptionsFrom(options: AppOptions): SessionStoreOptions {
   return {
     ...(options.dataDir ? { storage: new FileSessionStorage(options.dataDir) } : {}),
     ...(options.handlers ? { handlers: options.handlers } : {}),
+    ...(options.expressions ? { expressions: options.expressions } : {}),
   };
 }
 

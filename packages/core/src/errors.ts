@@ -14,3 +14,10 @@ export class BpmnValidationError extends BpmnFlowError {}
 
 /** Raised when the engine reaches an unsupported or inconsistent state. */
 export class BpmnExecutionError extends BpmnFlowError {}
+
+/**
+ * Raised when an expression cannot be parsed or reaches something the safe
+ * evaluator does not allow. Callers treat it as `undefined` (a condition then
+ * reads as `false`), so it rarely escapes the engine.
+ */
+export class BpmnExpressionError extends BpmnFlowError {}

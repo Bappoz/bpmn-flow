@@ -4,6 +4,7 @@ import {
   WorkflowEngine,
   type EngineMode,
   type EngineOptions,
+  type ExpressionMode,
   type ExecutionSnapshot,
   type ExecutionStatus,
   type IncidentState,
@@ -14,6 +15,11 @@ import {
 } from '@bpmn-flow/core';
 import type { SessionStorage } from './storage.js';
 
+/**
+ * Body of a create request. Note what is *not* here: how expressions are
+ * evaluated. That is the host's call ({@link SessionStoreOptions.expressions}),
+ * never the caller's, so posting a diagram cannot buy code execution.
+ */
 export interface CreateSessionInput {
   xml: string;
   mode?: EngineMode;
@@ -57,6 +63,13 @@ export interface SessionStoreOptions {
    * activities simply pass through.
    */
   handlers?: Record<string, TaskHandler>;
+  /**
+   * How the diagram's expressions are evaluated. `safe` (the default) parses
+   * and interprets them without ever compiling code, which is what makes
+   * running a diagram from an unknown source acceptable. Switch to
+   * `javascript` only when every XML this store executes is authored by you.
+   */
+  expressions?: ExpressionMode;
 }
 
 /**
@@ -72,10 +85,12 @@ export class SessionStore {
   private readonly cache = new Map<string, LiveSession>();
   private readonly storage: SessionStorage | undefined;
   private readonly handlers: Record<string, TaskHandler>;
+  private readonly expressions: ExpressionMode;
 
   constructor(options: SessionStoreOptions = {}) {
     this.storage = options.storage;
     this.handlers = options.handlers ?? {};
+    this.expressions = options.expressions ?? 'safe';
   }
 
   /** Applies the store's automation to a freshly built engine. */
@@ -91,6 +106,7 @@ export class SessionStore {
     const engine = this.wire(
       new WorkflowEngine(process, {
         processes,
+        expressions: this.expressions,
         ...(input.mode ? { mode: input.mode } : {}),
         ...(input.variables ? { variables: input.variables } : {}),
         ...(input.onHandlerError ? { onHandlerError: input.onHandlerError } : {}),
@@ -243,7 +259,12 @@ export class SessionStore {
     const record = await this.storage?.read(id);
     if (!record) return undefined;
     const { process, processes } = await readProcesses(record.xml);
-    const engine = this.wire(WorkflowEngine.restore(process, record.state, { processes }));
+    const engine = this.wire(
+      WorkflowEngine.restore(process, record.state, {
+        processes,
+        expressions: this.expressions,
+      }),
+    );
     const session: LiveSession = {
       id: record.id,
       xml: record.xml,

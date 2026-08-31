@@ -231,12 +231,15 @@ o número de tokens que chegaram é exposto como `arrived`, o que dá quórum
 
 ## Fluxos de sequência
 
-Condições (`conditionExpression`) são avaliadas como JavaScript sobre as
-variáveis visíveis no escopo do token, com suporte ao invólucro `${ ... }`.
+Condições (`conditionExpression`) são avaliadas sobre as variáveis visíveis no
+escopo do token, com suporte ao invólucro `${ ... }`. O avaliador padrão lê um
+subconjunto de JavaScript — sem função anônima, atribuição, `new` ou chamada
+fora da allowlist — e o interpreta sem compilar código; `expressions:
+'javascript'` troca isso pela linguagem inteira, para diagramas confiáveis.
 Variável inexistente lê como `undefined` em vez de lançar — `pago !== true` é
 verdadeiro antes de alguém definir `pago`, como num avaliador FEEL. Uma
-expressão que ainda assim lança, ou que não retorna `true`, é tratada como falsa
-(fail-closed).
+expressão que lança, que o avaliador seguro recusa, ou que não retorna `true`, é
+tratada como falsa (fail-closed).
 
 ## Divergências assumidas
 

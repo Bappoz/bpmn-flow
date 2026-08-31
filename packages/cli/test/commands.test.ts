@@ -120,6 +120,42 @@ const QUEBRADO = `<?xml version="1.0" encoding="UTF-8"?>
   </bpmn:process>
 </bpmn:definitions>`;
 
+describe('run and the expression mode', () => {
+  /** The guard only routes when the whole JavaScript language is available. */
+  const JS_GUARD = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  targetNamespace="http://bpmn-flow.test" id="Defs">
+  <bpmn:process id="P" isExecutable="true">
+    <bpmn:startEvent id="Start" />
+    <bpmn:exclusiveGateway id="Gw" default="fPadrao" />
+    <bpmn:task id="Calculado" />
+    <bpmn:task id="Padrao" />
+    <bpmn:endEvent id="End" />
+    <bpmn:sequenceFlow id="f0" sourceRef="Start" targetRef="Gw" />
+    <bpmn:sequenceFlow id="fCalculado" sourceRef="Gw" targetRef="Calculado">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">itens.some((i) =&gt; i &gt; 2)</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="fPadrao" sourceRef="Gw" targetRef="Padrao" />
+    <bpmn:sequenceFlow id="f1" sourceRef="Calculado" targetRef="End" />
+    <bpmn:sequenceFlow id="f2" sourceRef="Padrao" targetRef="End" />
+  </bpmn:process>
+</bpmn:definitions>`;
+
+  it('reads an expression outside the safe subset as false', async () => {
+    const result = await run(JS_GUARD, { variables: { itens: [1, 3] } });
+    expect(result.snapshot.completedNodes).toContain('Padrao');
+  });
+
+  it('routes on it once --js-expressions is asked for', async () => {
+    const result = await run(JS_GUARD, {
+      variables: { itens: [1, 3] },
+      expressions: 'javascript',
+    });
+    expect(result.snapshot.completedNodes).toContain('Calculado');
+  });
+});
+
 describe('inspect, deeper', () => {
   it('lists timers, loops and participants', async () => {
     const { output } = await inspect(COM_TIMER_E_POOL);

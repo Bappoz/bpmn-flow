@@ -1,5 +1,6 @@
 import type { ElementKind } from '../model/kinds.js';
 import type { ProcessModel } from '../model/types.js';
+import type { ExpressionMode } from './expression.js';
 
 export type ExecutionStatus =
   'idle' | 'running' | 'waiting' | 'completed' | 'terminated' | 'failed';
@@ -143,6 +144,14 @@ export interface EngineOptions {
   now?: () => number;
   /** Guards against infinite loops; caps node transitions per drain. */
   maxSteps?: number;
+  /**
+   * How flow conditions and other expressions of the diagram are evaluated.
+   * `safe` (default) interprets a JavaScript subset with allowlisted globals;
+   * `javascript` compiles the expression with `new Function` and therefore
+   * trusts the definition as much as the surrounding code — only for diagrams
+   * you author yourself.
+   */
+  expressions?: ExpressionMode;
   /** Initial process variables. */
   variables?: Record<string, unknown>;
   /**

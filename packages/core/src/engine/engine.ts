@@ -10,7 +10,7 @@ import type {
 } from '../model/types.js';
 import type { EventDefinitionKind } from '../model/kinds.js';
 import { Emitter } from './emitter.js';
-import { evaluateCondition, evaluateExpression } from './expression.js';
+import { evaluateCondition, evaluateExpression, type ExpressionMode } from './expression.js';
 import { BpmnError, HandlerRegistry, type TaskHandler } from './handlers.js';
 import {
   ENGINE_STATE_VERSION,
@@ -143,6 +143,8 @@ export class WorkflowEngine {
   private readonly now: () => number;
   private readonly maxSteps: number;
   private readonly mode: 'automation' | 'auto';
+  /** How the diagram's expressions are evaluated; safe unless the host says so. */
+  private readonly expressions: ExpressionMode;
   private steps = 0;
 
   constructor(
@@ -159,7 +161,18 @@ export class WorkflowEngine {
     }
     this.maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
     this.mode = options.mode ?? 'automation';
+    this.expressions = options.expressions ?? 'safe';
     this.now = options.now ?? (() => Date.now());
+  }
+
+  /** Evaluates one of the diagram's expressions under the engine's mode. */
+  private evaluate(expression: string, variables: Record<string, unknown>): unknown {
+    return evaluateExpression(expression, variables, this.expressions);
+  }
+
+  /** Evaluates one of the diagram's expressions as a guard. */
+  private condition(expression: string, variables: Record<string, unknown>): boolean {
+    return evaluateCondition(expression, variables, this.expressions);
   }
 
   // --- Public API --------------------------------------------------------
@@ -517,7 +530,7 @@ export class WorkflowEngine {
   static restore(
     process: ProcessModel,
     state: EngineState,
-    options: Pick<EngineOptions, 'mode' | 'maxSteps' | 'processes' | 'now'> = {},
+    options: Pick<EngineOptions, 'mode' | 'maxSteps' | 'processes' | 'now' | 'expressions'> = {},
   ): WorkflowEngine {
     if (state.version !== ENGINE_STATE_VERSION) {
       throw new BpmnValidationError(
@@ -1240,7 +1253,7 @@ export class WorkflowEngine {
     if (!node.dataInput || node.dataInput.length === 0) return;
     const source = this.mergedVariables(from);
     for (const mapping of node.dataInput) {
-      into.variables[mapping.to] = evaluateExpression(mapping.from, source);
+      into.variables[mapping.to] = this.evaluate(mapping.from, source);
     }
     // Declaring a mapping means the activity works with its own data only.
     delete into.parentScope;
@@ -1252,7 +1265,7 @@ export class WorkflowEngine {
     if (!node.dataOutput || node.dataOutput.length === 0) return;
     const source = this.mergedVariables(from);
     for (const mapping of node.dataOutput) {
-      this.writeVariable(into, mapping.to, evaluateExpression(mapping.from, source));
+      this.writeVariable(into, mapping.to, this.evaluate(mapping.from, source));
     }
   }
 
@@ -1359,7 +1372,7 @@ export class WorkflowEngine {
         items = [...collection];
         total = items.length;
       } else if (loop.cardinality) {
-        const value = Number(evaluateExpression(loop.cardinality, variables));
+        const value = Number(this.evaluate(loop.cardinality, variables));
         if (!Number.isFinite(value) || value < 0) {
           this.fail(
             new BpmnExecutionError(`Multi-instance cardinality of ${node.id} is not a number.`),
@@ -1378,11 +1391,7 @@ export class WorkflowEngine {
     } else {
       total = loop.maximum ?? DEFAULT_LOOP_MAXIMUM;
       // `testBefore` means the condition guards the very first iteration too.
-      if (
-        loop.testBefore &&
-        loop.loopCondition &&
-        !evaluateCondition(loop.loopCondition, variables)
-      )
+      if (loop.testBefore && loop.loopCondition && !this.condition(loop.loopCondition, variables))
         total = 0;
     }
 
@@ -1460,10 +1469,7 @@ export class WorkflowEngine {
 
     const variables = this.mergedVariables(run.scope);
     if (run.loop.kind === 'multiInstance') {
-      if (
-        run.loop.completionCondition &&
-        evaluateCondition(run.loop.completionCondition, variables)
-      )
+      if (run.loop.completionCondition && this.condition(run.loop.completionCondition, variables))
         return this.finishLoop(run);
       if (run.loop.sequential) {
         if (run.started < run.total) return this.startLoopInstance(run);
@@ -1475,7 +1481,7 @@ export class WorkflowEngine {
 
     const repeat =
       run.started < run.total &&
-      (!run.loop.loopCondition || evaluateCondition(run.loop.loopCondition, variables));
+      (!run.loop.loopCondition || this.condition(run.loop.loopCondition, variables));
     if (repeat) this.startLoopInstance(run);
     else this.finishLoop(run);
   }
@@ -1669,7 +1675,7 @@ export class WorkflowEngine {
     for (const flow of flows) {
       if (flow.id === node.default) continue;
       if (!flow.conditionExpression) return flow;
-      if (evaluateCondition(flow.conditionExpression, variables)) return flow;
+      if (this.condition(flow.conditionExpression, variables)) return flow;
     }
     return undefined;
   }
@@ -1686,7 +1692,7 @@ export class WorkflowEngine {
     const taken = flows.filter(
       (f) =>
         f.id !== node.default &&
-        (!f.conditionExpression || evaluateCondition(f.conditionExpression, variables)),
+        (!f.conditionExpression || this.condition(f.conditionExpression, variables)),
     );
     const byData =
       taken.length > 0
@@ -1733,7 +1739,7 @@ export class WorkflowEngine {
     // Uncontrolled flow: take every unconditional/true-condition flow.
     const variables = this.mergedVariables(token.scope);
     const taken = flows.filter(
-      (f) => !f.conditionExpression || evaluateCondition(f.conditionExpression, variables),
+      (f) => !f.conditionExpression || this.condition(f.conditionExpression, variables),
     );
     const chosen =
       taken.length > 0
@@ -2015,7 +2021,7 @@ export class WorkflowEngine {
       if (node.activationCondition) {
         // Complex gateway: the diagram decides when enough tokens arrived.
         const variables = { ...this.mergedVariables(scope), arrived: buffer.length };
-        if (!evaluateCondition(node.activationCondition, variables)) continue;
+        if (!this.condition(node.activationCondition, variables)) continue;
       } else if (this.canAnyTokenReach(scope, node.id, buffer)) {
         continue;
       }
@@ -2039,7 +2045,7 @@ export class WorkflowEngine {
       const node = token.scope.graph.node(token.nodeId);
       const condition = node ? detailOfKind(node, 'conditional')?.condition : undefined;
       if (!condition) continue;
-      if (!evaluateCondition(condition, this.mergedVariables(token.scope))) continue;
+      if (!this.condition(condition, this.mergedVariables(token.scope))) continue;
       this.waiting.delete(token.id);
       token.waiting = undefined;
       this.completeNode(token);
@@ -2061,7 +2067,7 @@ export class WorkflowEngine {
         if (!condition) continue;
         const key = `${boundary.id}:${token.id}`;
         if (this.firedConditionals.has(key)) continue;
-        if (!evaluateCondition(condition, this.mergedVariables(scope))) continue;
+        if (!this.condition(condition, this.mergedVariables(scope))) continue;
         this.firedConditionals.add(key);
         if (this.fireBoundary(scope, boundary)) return true;
       }
@@ -2073,7 +2079,7 @@ export class WorkflowEngine {
   private finishSatisfiedAdHocScopes(): boolean {
     for (const scope of [...this.scopes]) {
       if (!scope.completionCondition) continue;
-      if (!evaluateCondition(scope.completionCondition, this.mergedVariables(scope))) continue;
+      if (!this.condition(scope.completionCondition, this.mergedVariables(scope))) continue;
       for (const token of [...scope.tokens]) this.discard(token);
       scope.adHocPending = [];
       delete scope.completionCondition;
