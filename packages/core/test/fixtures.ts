@@ -290,6 +290,40 @@ export const MI_PARALLEL_USER_TASKS = wrap(`
     <bpmn:sequenceFlow id="f0" sourceRef="Start" targetRef="Approve" />
     <bpmn:sequenceFlow id="f1" sourceRef="Approve" targetRef="End" />`);
 
+export const MI_PARALLEL_COLLECTION = wrap(`
+    <bpmn:startEvent id="Start" />
+    <bpmn:dataObject id="itens" name="itens" />
+    <bpmn:dataObject id="resultados" name="resultados" />
+    <bpmn:userTask id="Handle" name="Handle item">
+      <bpmn:multiInstanceLoopCharacteristics isSequential="false">
+        <bpmn:loopDataInputRef>itens</bpmn:loopDataInputRef>
+        <bpmn:inputDataItem id="item" name="item" />
+        <bpmn:loopDataOutputRef>resultados</bpmn:loopDataOutputRef>
+        <bpmn:outputDataItem id="resultado" name="resultado" />
+      </bpmn:multiInstanceLoopCharacteristics>
+    </bpmn:userTask>
+    <bpmn:endEvent id="End" />
+    <bpmn:sequenceFlow id="f0" sourceRef="Start" targetRef="Handle" />
+    <bpmn:sequenceFlow id="f1" sourceRef="Handle" targetRef="End" />`);
+
+/** Same as {@link MI_PARALLEL_COLLECTION}, but stops after two results. */
+export const MI_PARALLEL_PARTIAL = wrap(`
+    <bpmn:startEvent id="Start" />
+    <bpmn:dataObject id="itens" name="itens" />
+    <bpmn:dataObject id="resultados" name="resultados" />
+    <bpmn:userTask id="Handle" name="Handle item">
+      <bpmn:multiInstanceLoopCharacteristics isSequential="false">
+        <bpmn:loopDataInputRef>itens</bpmn:loopDataInputRef>
+        <bpmn:inputDataItem id="item" name="item" />
+        <bpmn:loopDataOutputRef>resultados</bpmn:loopDataOutputRef>
+        <bpmn:outputDataItem id="resultado" name="resultado" />
+        <bpmn:completionCondition xsi:type="bpmn:tFormalExpression">resultados.length &gt;= 2</bpmn:completionCondition>
+      </bpmn:multiInstanceLoopCharacteristics>
+    </bpmn:userTask>
+    <bpmn:endEvent id="End" />
+    <bpmn:sequenceFlow id="f0" sourceRef="Start" targetRef="Handle" />
+    <bpmn:sequenceFlow id="f1" sourceRef="Handle" targetRef="End" />`);
+
 export const MI_SEQUENTIAL = wrap(`
     <bpmn:startEvent id="Start" />
     <bpmn:userTask id="Step" name="Step">

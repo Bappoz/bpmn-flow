@@ -309,6 +309,11 @@ const snapshot = await engine.start(); // uma instância por item de "itens"
 snapshot.variables.separados; // ["teclado separado", "mouse separado", ...]
 ```
 
+A coleção de saída acompanha a **ordem da coleção de entrada**: `separados[2]` é
+sempre o resultado de `itens[2]`, mesmo quando as instâncias paralelas terminam
+fora de ordem. Uma condição de conclusão que corta o resto simplesmente deixa a
+coleção mais curta, sem buracos.
+
 Variáveis seguem escopo: a leitura sobe a cadeia (instância → subprocesso →
 processo) e a escrita vai para onde a variável já existe, caindo no processo
 quando ela é nova. Um handler pode forçar o escopo local com `ctx.setLocal()`.

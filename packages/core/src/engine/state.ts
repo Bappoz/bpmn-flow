@@ -14,7 +14,7 @@ import type { EngineMode, ExecutionStatus, HistoryEntry, WaitReason } from './ty
  *
  * Bump {@link ENGINE_STATE_VERSION} whenever the shape changes.
  */
-export const ENGINE_STATE_VERSION = 6;
+export const ENGINE_STATE_VERSION = 7;
 
 /** Where a token currently sits, since not every token lives in a scope. */
 export type TokenPlacement =
@@ -48,6 +48,8 @@ export interface ScopeState {
   variables?: Record<string, unknown>;
   /** Set when the scope holds one instance of a repeated activity. */
   loopId?: string;
+  /** Position of the instance in the loop, `0`-based. Stored with `loopId`. */
+  loopIndex?: number;
   /** Data-mapped scopes do not read the caller's variables. */
   isolated?: boolean;
   /** Ad-hoc subprocess: activities not started yet. */
@@ -64,6 +66,8 @@ export interface LoopRunState {
   total: number;
   started: number;
   completed: number;
+  /** Output of each finished instance, tagged with the instance index. */
+  results?: { index: number; value: unknown }[];
   instanceScopeIds: string[];
 }
 

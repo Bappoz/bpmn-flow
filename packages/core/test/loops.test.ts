@@ -4,6 +4,8 @@ import type { EngineState, ProcessModel } from '../src/index.js';
 import {
   MI_COLLECTION,
   MI_COMPLETION_CONDITION,
+  MI_PARALLEL_COLLECTION,
+  MI_PARALLEL_PARTIAL,
   MI_PARALLEL_USER_TASKS,
   MI_SEQUENTIAL,
   MI_SUBPROCESS,
@@ -82,6 +84,59 @@ describe('parallel multi-instance user tasks', () => {
 
     expect(snap.status).toBe('completed');
     expect(snap.completedNodes).toContain('End');
+  });
+});
+
+describe('parallel multi-instance output collection', () => {
+  /** Completes the instance handling `item`, whatever its position. */
+  async function completeItem(eng: WorkflowEngine, item: string): Promise<void> {
+    const task = eng.tasks().find((t) => t.variables.item === item);
+    expect(task, `no pending instance for item ${item}`).toBeDefined();
+    await eng.completeTask(task!.tokenId, { resultado: `r-${item}` });
+  }
+
+  it('keeps the output collection positional when instances finish out of order', async () => {
+    const p = await process(MI_PARALLEL_COLLECTION);
+    const eng = new WorkflowEngine(p, { variables: { itens: ['a', 'b', 'c'] } });
+    let snap = await eng.start();
+    expect(snap.tokens.filter((t) => t.waiting)).toHaveLength(3);
+
+    // Reverse of the input order: the aggregation must not follow it.
+    for (const item of ['c', 'b', 'a']) await completeItem(eng, item);
+
+    snap = eng.snapshot();
+    expect(snap.status).toBe('completed');
+    expect(snap.variables.resultados).toEqual(['r-a', 'r-b', 'r-c']);
+  });
+
+  it('keeps the order across a state round-trip', async () => {
+    const p = await process(MI_PARALLEL_COLLECTION);
+    const first = new WorkflowEngine(p, { variables: { itens: ['a', 'b', 'c'] } });
+    await first.start();
+    await completeItem(first, 'c');
+
+    const state = JSON.parse(JSON.stringify(first.getState())) as EngineState;
+    const second = WorkflowEngine.restore(p, state);
+    await completeItem(second, 'a');
+    await completeItem(second, 'b');
+
+    const snap = second.snapshot();
+    expect(snap.status).toBe('completed');
+    expect(snap.variables.resultados).toEqual(['r-a', 'r-b', 'r-c']);
+  });
+
+  it('leaves no gap when the completion condition cancels the rest', async () => {
+    const p = await process(MI_PARALLEL_PARTIAL);
+    const eng = new WorkflowEngine(p, { variables: { itens: ['a', 'b', 'c'] } });
+    await eng.start();
+
+    await completeItem(eng, 'c');
+    await completeItem(eng, 'a'); // second result satisfies `resultados.length >= 2`
+
+    const snap = eng.snapshot();
+    expect(snap.status).toBe('completed');
+    // Instance `b` never ran: its slot is dropped, not left as a hole.
+    expect(snap.variables.resultados).toEqual(['r-a', 'r-c']);
   });
 });
 
