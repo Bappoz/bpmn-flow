@@ -189,6 +189,12 @@ function findParallelJoinDeadlocks(process: ProcessModel, issues: StaticAnalysis
       if (branchCount < 2) continue;
       const split = nodes.get(splitId);
       if (!split || !PARTIAL_SPLIT_KINDS.has(split.kind)) continue;
+      if (
+        split.kind === 'inclusiveGateway' &&
+        split.outgoing.every((flowId) => !flows.get(flowId)?.conditionExpression)
+      ) {
+        continue;
+      }
       issues.push({
         kind: 'parallel-join-deadlock',
         severity: 'error',
