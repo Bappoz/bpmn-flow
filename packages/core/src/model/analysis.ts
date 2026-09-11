@@ -226,6 +226,10 @@ function findTrappedCycles(process: ProcessModel, issues: StaticAnalysisIssue[])
         .filter((t): t is string => t !== undefined),
     );
   }
+  for (const boundary of process.flowNodes) {
+    if (boundary.kind !== 'boundaryEvent' || !boundary.attachedToRef) continue;
+    adjacency.get(boundary.attachedToRef)?.push(boundary.id);
+  }
 
   for (const component of stronglyConnectedComponents(
     process.flowNodes.map((n) => n.id),
