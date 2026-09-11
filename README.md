@@ -259,6 +259,33 @@ especificação.
 
 ![Diálogo do passo a passo perguntando o valor e o caminho a seguir](docs/media/passo-a-passo-decisao.png)
 
+## Análise estática do grafo
+
+`analyzeProcess` lê o grafo sem executar nada e aponta o que só apareceria
+depois — ou nunca apareceria, por travar antes: nó inalcançável a partir de
+qualquer início, ciclo sem fluxo de saída, gateway exclusivo sem default que
+falha se nenhuma condição bater, e junção paralela alimentada por um gateway
+que só manda o token por um dos ramos.
+
+```ts
+analyzeProcess(process);
+// [{ kind: 'parallel-join-deadlock', severity: 'error', nodeId: 'Join',
+//    causeNodeId: 'Split',
+//    message: '"Join" waits for a token on every incoming flow, but "Split" only...' }]
+```
+
+`criticalPath` usa as métricas de execuções anteriores (`engine.metrics()`)
+para achar o caminho do início ao fim com a maior soma de duração média — o
+gargalo mais provável do processo:
+
+```ts
+criticalPath(process, engine.metrics());
+// { path: ['Start', 'Gw', 'AprovacaoGerencial', 'End'], totalMs: 7200000 }
+```
+
+Detalhes de cada verificação em [`packages/core/README.md`](packages/core/README.md),
+seção `analyzeProcess`.
+
 ## Timers
 
 Eventos de timer viram data de vencimento. O motor não tem relógio próprio: ele
