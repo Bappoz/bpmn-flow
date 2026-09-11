@@ -26,6 +26,13 @@ export function criticalPath(
   const weightOf = new Map(metrics.map((m) => [m.nodeId, m.averageMs]));
   const nodes = new Map(process.flowNodes.map((n) => [n.id, n]));
   const flows = new Map(process.sequenceFlows.map((f) => [f.id, f]));
+  const boundaryByHost = new Map<string, string[]>();
+  for (const node of process.flowNodes) {
+    if (node.kind !== 'boundaryEvent' || !node.attachedToRef) continue;
+    const boundaries = boundaryByHost.get(node.attachedToRef) ?? [];
+    boundaries.push(node.id);
+    boundaryByHost.set(node.attachedToRef, boundaries);
+  }
   const starts = process.flowNodes.filter(
     (n) => n.kind === 'startEvent' && n.incoming.length === 0,
   );
@@ -46,10 +53,12 @@ export function criticalPath(
     if (node.kind === 'endEvent') {
       best = { path: [nodeId], totalMs: selfWeight };
     } else {
-      for (const flowId of node.outgoing) {
-        const flow = flows.get(flowId);
-        if (!flow) continue;
-        const tail = longestFrom(flow.targetRef);
+      const successors = [
+        ...node.outgoing.map((flowId) => flows.get(flowId)?.targetRef).filter((id): id is string => !!id),
+        ...(boundaryByHost.get(node.id) ?? []),
+      ];
+      for (const successorId of successors) {
+        const tail = longestFrom(successorId);
         if (!tail) continue;
 
         const candidate: CriticalPathResult = {

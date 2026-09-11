@@ -201,4 +201,26 @@ describe('criticalPath', () => {
     const model = await process(ENDLESS_LOOP);
     expect(criticalPath(model, [metric('Spin', 1000)])).toBeUndefined();
   });
+
+  it('can reach an end event through a boundary event path', async () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" targetNamespace="t" id="D">
+  <bpmn:process id="P" isExecutable="true">
+    <bpmn:startEvent id="Start" />
+    <bpmn:task id="Work" />
+    <bpmn:boundaryEvent id="Timeout" attachedToRef="Work">
+      <bpmn:timerEventDefinition />
+    </bpmn:boundaryEvent>
+    <bpmn:endEvent id="TimeoutEnd" />
+    <bpmn:sequenceFlow id="f0" sourceRef="Start" targetRef="Work" />
+    <bpmn:sequenceFlow id="f1" sourceRef="Work" targetRef="Work" />
+    <bpmn:sequenceFlow id="f2" sourceRef="Timeout" targetRef="TimeoutEnd" />
+  </bpmn:process>
+</bpmn:definitions>`;
+    const model = await process(xml);
+    expect(criticalPath(model, [metric('Work', 1000)])).toEqual({
+      path: ['Start', 'Work', 'Timeout', 'TimeoutEnd'],
+      totalMs: 1000,
+    });
+  });
 });
