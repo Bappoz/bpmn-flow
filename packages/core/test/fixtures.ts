@@ -232,6 +232,46 @@ export const ENDLESS_LOOP = wrap(`
     <bpmn:sequenceFlow id="f1" sourceRef="Spin" targetRef="Again" />
     <bpmn:sequenceFlow id="fBack" sourceRef="Again" targetRef="Spin" />`);
 
+/** A parallel join starved by an exclusive split above it: `Join` never sees a token on `fb2`. */
+export const PARALLEL_DEADLOCK = wrap(`
+    <bpmn:startEvent id="Start" />
+    <bpmn:exclusiveGateway id="Split" default="fb" />
+    <bpmn:task id="A" />
+    <bpmn:task id="B" />
+    <bpmn:parallelGateway id="Join" />
+    <bpmn:endEvent id="End" />
+    <bpmn:sequenceFlow id="f0" sourceRef="Start" targetRef="Split" />
+    <bpmn:sequenceFlow id="fa" sourceRef="Split" targetRef="A">${cond('go === true')}</bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="fb" sourceRef="Split" targetRef="B" />
+    <bpmn:sequenceFlow id="fa2" sourceRef="A" targetRef="Join" />
+    <bpmn:sequenceFlow id="fb2" sourceRef="B" targetRef="Join" />
+    <bpmn:sequenceFlow id="fj" sourceRef="Join" targetRef="End" />`);
+
+/** `Lost` and `Orphan` form their own island, disconnected from `Start`. */
+export const UNREACHABLE_ISLAND = wrap(`
+    <bpmn:startEvent id="Start" />
+    <bpmn:task id="Main" />
+    <bpmn:endEvent id="End" />
+    <bpmn:task id="Lost" />
+    <bpmn:task id="Orphan" />
+    <bpmn:sequenceFlow id="f0" sourceRef="Start" targetRef="Main" />
+    <bpmn:sequenceFlow id="f1" sourceRef="Main" targetRef="End" />
+    <bpmn:sequenceFlow id="fx" sourceRef="Lost" targetRef="Orphan" />`);
+
+/** `Gw` has no default and both flows are conditional: nothing to fall back to. */
+export const EXCLUSIVE_NO_DEFAULT = wrap(`
+    <bpmn:startEvent id="Start" />
+    <bpmn:exclusiveGateway id="Gw" />
+    <bpmn:task id="High" />
+    <bpmn:task id="Low" />
+    <bpmn:endEvent id="EndHigh" />
+    <bpmn:endEvent id="EndLow" />
+    <bpmn:sequenceFlow id="f0" sourceRef="Start" targetRef="Gw" />
+    <bpmn:sequenceFlow id="fHigh" sourceRef="Gw" targetRef="High">${cond('amount &gt; 100')}</bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="fLow" sourceRef="Gw" targetRef="Low">${cond('amount &lt;= 100')}</bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="fh2" sourceRef="High" targetRef="EndHigh" />
+    <bpmn:sequenceFlow id="fl2" sourceRef="Low" targetRef="EndLow" />`);
+
 export const PARALLEL_WAIT = wrap(`
     <bpmn:startEvent id="Start" />
     <bpmn:parallelGateway id="Split" />

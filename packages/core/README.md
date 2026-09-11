@@ -57,6 +57,56 @@ aplicar `assignments` deixa exatamente aquele caminho aberto. Quando a expressã
 não diz nada sobre a forma do valor (uma chamada, uma conta), `assignments` vem
 vazio e o valor tem de ser informado.
 
+### `analyzeProcess(process): StaticAnalysisIssue[]`
+
+Analisa o grafo antes de qualquer execução e aponta o que só um token real
+descobriria (ou nunca descobriria, por ficar preso antes):
+
+- **`unreachable`**: nó que nenhum evento de início alcança, seguindo fluxos e
+  eventos de borda. Não recursa em subprocesso ad-hoc — sem fluxo declarado,
+  nada ali é "inalcançável".
+- **`cycle-without-exit`**: componente fortemente conexo do grafo sem nenhum
+  fluxo saindo dele — um token que entra nunca mais sai. Um laço com uma
+  condição de saída real (outro fluxo do gateway leva para fora do ciclo) não é
+  apontado.
+- **`gateway-without-default`**: gateway exclusivo sem fluxo default em que
+  todo fluxo de saída é condicional — se nenhuma condição bater em tempo de
+  execução, o motor falha por não ter para onde ir. Um fluxo sem condição não
+  conta (o motor já o trata como default implícito).
+- **`parallel-join-deadlock`**: junção paralela alimentada por um gateway
+  exclusivo, inclusivo ou baseado em evento que só manda o token por um (ou
+  alguns) dos ramos que chegam nela — a junção espera token em toda entrada e
+  nunca completa.
+
+```ts
+analyzeProcess(process);
+// [{ kind: 'parallel-join-deadlock', severity: 'error', nodeId: 'Join',
+//    causeNodeId: 'Split',
+//    message: '"Join" waits for a token on every incoming flow, but "Split" only...' }]
+```
+
+Recursa em todo subprocesso do modelo. Não modifica nem executa nada — é leitura
+pura do grafo, então pode rodar sobre qualquer `ProcessModel` já parseado, sem
+subir um `WorkflowEngine`.
+
+### `criticalPath(process, metrics): CriticalPathResult | undefined`
+
+O caminho do início ao fim mais provável de ser o gargalo, pesando cada
+atividade pela duração média de `metrics` (normalmente `engine.metrics()`,
+somado de quantas execuções passadas fizer sentido considerar). Um nó sem
+métrica pesa zero; um laço é percorrido no máximo uma vez por caminho, então um
+processo com ciclos ainda devolve o caminho simples mais longo em vez de um sem
+fim.
+
+```ts
+criticalPath(process, engine.metrics());
+// { path: ['Start', 'Gw', 'AprovacaoGerencial', 'End'], totalMs: 7200000 }
+```
+
+`undefined` quando nenhum caminho de um início chega a um fim (por exemplo, um
+processo cujos únicos nós depois do início estão presos num
+`cycle-without-exit`).
+
 ### `addFlowReferences(xml): Promise<string>`
 
 Devolve o mesmo XML com o `<bpmn:incoming>`/`<bpmn:outgoing>` de cada nó
