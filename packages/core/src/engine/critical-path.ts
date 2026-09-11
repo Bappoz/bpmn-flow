@@ -15,9 +15,9 @@ export interface CriticalPathResult {
  * however many past executions the caller wants to account for).
  *
  * Undefined when the metrics do not name it (weighed as zero) and when no
- * path from a start reaches an end event at all. A loop is walked at most
- * once per path — revisiting a node ends that branch there — so a process
- * with cycles still gets a longest *simple* path instead of an unbounded one.
+ * path from a start reaches an end event at all. Acyclic portions are solved
+ * with memoized dynamic programming; cyclic back-edges are ignored during the
+ * current recursion branch so loops stay bounded.
  */
 export function criticalPath(
   process: ProcessModel,
@@ -30,25 +30,45 @@ export function criticalPath(
     (n) => n.kind === 'startEvent' && n.incoming.length === 0,
   );
 
-  let best: CriticalPathResult | undefined;
+  const memo = new Map<string, CriticalPathResult | undefined>();
+  const visiting = new Set<string>();
 
-  const walk = (nodeId: string, path: string[], visited: Set<string>, totalMs: number): void => {
+  const longestFrom = (nodeId: string): CriticalPathResult | undefined => {
+    if (memo.has(nodeId)) return memo.get(nodeId);
+    if (visiting.has(nodeId)) return undefined;
     const node = nodes.get(nodeId);
-    if (!node) return;
-    const nextPath = [...path, nodeId];
-    const nextTotal = totalMs + (weightOf.get(nodeId) ?? 0);
+    if (!node) return undefined;
+
+    visiting.add(nodeId);
+    const selfWeight = weightOf.get(nodeId) ?? 0;
+    let best: CriticalPathResult | undefined;
 
     if (node.kind === 'endEvent') {
-      if (!best || nextTotal > best.totalMs) best = { path: nextPath, totalMs: nextTotal };
-      return;
+      best = { path: [nodeId], totalMs: selfWeight };
+    } else {
+      for (const flowId of node.outgoing) {
+        const flow = flows.get(flowId);
+        if (!flow) continue;
+        const tail = longestFrom(flow.targetRef);
+        if (!tail) continue;
+
+        const candidate: CriticalPathResult = {
+          path: [nodeId, ...tail.path],
+          totalMs: selfWeight + tail.totalMs,
+        };
+        if (!best || candidate.totalMs > best.totalMs) best = candidate;
+      }
     }
-    for (const flowId of node.outgoing) {
-      const flow = flows.get(flowId);
-      if (!flow || visited.has(flow.targetRef)) continue;
-      walk(flow.targetRef, nextPath, new Set(visited).add(flow.targetRef), nextTotal);
-    }
+
+    visiting.delete(nodeId);
+    memo.set(nodeId, best);
+    return best;
   };
 
-  for (const start of starts) walk(start.id, [], new Set([start.id]), 0);
+  let best: CriticalPathResult | undefined;
+  for (const start of starts) {
+    const candidate = longestFrom(start.id);
+    if (candidate && (!best || candidate.totalMs > best.totalMs)) best = candidate;
+  }
   return best;
 }
