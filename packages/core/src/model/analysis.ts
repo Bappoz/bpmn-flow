@@ -93,7 +93,7 @@ function findUnreachable(process: ProcessModel, issues: StaticAnalysisIssue[]): 
   }
 
   for (const node of process.flowNodes) {
-    if (reachable.has(node.id)) continue;
+    if (node.triggeredByEvent || reachable.has(node.id)) continue;
     issues.push({
       kind: 'unreachable',
       severity: 'warning',
