@@ -122,7 +122,7 @@ function findUncoveredExclusiveGateways(
     const outgoing = node.outgoing
       .map((id) => flows.get(id))
       .filter((f): f is SequenceFlow => f !== undefined);
-    if (outgoing.length < 2) continue;
+    if (outgoing.length === 0) continue;
 
     const hasDefault = outgoing.some((f) => f.isDefault === true || f.id === node.default);
     if (hasDefault) continue;
