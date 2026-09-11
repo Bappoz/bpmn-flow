@@ -54,7 +54,9 @@ export function criticalPath(
       best = { path: [nodeId], totalMs: selfWeight };
     } else {
       const successors = [
-        ...node.outgoing.map((flowId) => flows.get(flowId)?.targetRef).filter((id): id is string => !!id),
+        ...node.outgoing
+          .map((flowId) => flows.get(flowId)?.targetRef)
+          .filter((id): id is string => !!id),
         ...(boundaryByHost.get(node.id) ?? []),
       ];
       for (const successorId of successors) {
