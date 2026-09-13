@@ -1,16 +1,18 @@
 import { BpmnModdle } from 'bpmn-moddle';
 import { BpmnParseError } from '../errors.js';
-import type { ElementKind, EventDefinitionKind } from '../model/kinds.js';
+import type { DataElementKind, ElementKind, EventDefinitionKind } from '../model/kinds.js';
 import {
   EVENT_KINDS,
   GATEWAY_KINDS,
   SUBPROCESS_KINDS,
   TASK_KINDS,
+  isDataElementKind,
   isEventKind,
 } from '../model/kinds.js';
 import type {
   Association,
   BpmnModel,
+  DataElement,
   DataMapping,
   EventDetail,
   FlowNode,
@@ -41,6 +43,24 @@ function toElementKind($type: string): ElementKind | null {
   const local = $type.replace(/^[^:]+:/, '');
   const camel = local.charAt(0).toLowerCase() + local.slice(1);
   return ELEMENT_KINDS.has(camel) ? (camel as ElementKind) : null;
+}
+
+/** `bpmn:DataObjectReference` -> `dataObjectReference`, or null if not data. */
+function toDataElementKind($type: string): DataElementKind | null {
+  const local = $type.replace(/^[^:]+:/, '');
+  const camel = local.charAt(0).toLowerCase() + local.slice(1);
+  return isDataElementKind(camel) ? camel : null;
+}
+
+/** One data declaration turned into a normalized {@link DataElement}. */
+function readDataElement(el: MdElement, kind: DataElementKind): DataElement | undefined {
+  if (!el.id) return undefined;
+  const data: DataElement = { id: el.id, kind };
+  if (el.name) data.name = el.name;
+  const ref = el.dataObjectRef?.id ?? el.dataStoreRef?.id;
+  if (ref) data.dataRef = ref;
+  if (el.isCollection) data.isCollection = true;
+  return data;
 }
 
 /** XSD element names that do not match the model's vocabulary. */
@@ -180,12 +200,14 @@ function readAssociations(artifacts: MdElement[] | undefined): Association[] {
 interface ScopeAccumulator {
   nodes: FlowNode[];
   flows: SequenceFlow[];
+  dataElements: DataElement[];
 }
 
 /** Recursively walks a process/subprocess scope into normalized model arrays. */
 function readScope(elements: MdElement[]): ScopeAccumulator {
   const nodes = new Map<string, FlowNode>();
   const flows: SequenceFlow[] = [];
+  const dataElements: DataElement[] = [];
 
   // First pass: flow nodes (so we can wire flows onto them afterwards).
   for (const el of elements) {
@@ -234,6 +256,7 @@ function readScope(elements: MdElement[]): ScopeAccumulator {
         flowNodes: inner.nodes,
         sequenceFlows: inner.flows,
         ...(associations.length > 0 ? { associations } : {}),
+        ...(inner.dataElements.length > 0 ? { dataElements: inner.dataElements } : {}),
       };
     }
     nodes.set(node.id, node);
@@ -243,6 +266,12 @@ function readScope(elements: MdElement[]): ScopeAccumulator {
   // themselves rather than trusting the optional node arrays.
   for (const el of elements) {
     if (toElementKind(el.$type) !== null) continue;
+    const dataKind = toDataElementKind(el.$type);
+    if (dataKind) {
+      const data = readDataElement(el, dataKind);
+      if (data) dataElements.push(data);
+      continue;
+    }
     if (el.$type.endsWith(':SequenceFlow') && el.id && el.sourceRef?.id && el.targetRef?.id) {
       const flow: SequenceFlow = {
         id: el.id,
@@ -265,7 +294,7 @@ function readScope(elements: MdElement[]): ScopeAccumulator {
     }
   }
 
-  return { nodes: [...nodes.values()], flows };
+  return { nodes: [...nodes.values()], flows, dataElements };
 }
 
 function readProcess(el: MdElement): ProcessModel {
@@ -285,6 +314,7 @@ function readProcess(el: MdElement): ProcessModel {
     flowNodes: scope.nodes,
     sequenceFlows: scope.flows,
     ...(associations.length > 0 ? { associations } : {}),
+    ...(scope.dataElements.length > 0 ? { dataElements: scope.dataElements } : {}),
   };
   if (el.name) process.name = el.name;
   return process;
@@ -317,10 +347,14 @@ export async function parseBpmn(xml: string): Promise<BpmnModel> {
   const processes: ProcessModel[] = [];
   const participants: Participant[] = [];
   const messageFlows: MessageFlow[] = [];
+  const dataStores: DataElement[] = [];
 
   for (const root of roots) {
     if (root.$type.endsWith(':Process')) {
       processes.push(readProcess(root));
+    } else if (root.$type.endsWith(':DataStore')) {
+      const store = readDataElement(root, 'dataStore');
+      if (store) dataStores.push(store);
     } else if (root.$type.endsWith(':Collaboration')) {
       for (const part of root.participants ?? []) {
         const participant: Participant = { id: part.id ?? '' };
@@ -347,6 +381,7 @@ export async function parseBpmn(xml: string): Promise<BpmnModel> {
     processes,
     participants,
     messageFlows,
+    dataStores,
   };
   if (definitions.name) model.name = definitions.name;
   return model;

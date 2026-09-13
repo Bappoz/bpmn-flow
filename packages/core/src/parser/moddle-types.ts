@@ -129,6 +129,14 @@ export interface MdElement {
   targetRef?: MdRef;
   conditionExpression?: { body?: string };
 
+  // data elements
+  /** `bpmn:dataObject`: declared as a collection. */
+  isCollection?: boolean;
+  /** `bpmn:dataObjectReference` -> the data object it stands for. */
+  dataObjectRef?: MdRef;
+  /** `bpmn:dataStoreReference` -> the data store it stands for. */
+  dataStoreRef?: MdRef;
+
   // collaboration
   participants?: MdElement[];
   processRef?: MdRef;

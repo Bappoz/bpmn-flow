@@ -79,6 +79,11 @@ export async function inspect(xml: string): Promise<CommandResult> {
     const lanes = [...new Set(nodes.map((node) => node.lane).filter(Boolean))];
     if (lanes.length > 0) lines.push(`  lanes: ${lanes.join(', ')}`);
 
+    const data = process.dataElements ?? [];
+    if (data.length > 0) {
+      lines.push(`  data: ${data.map((d) => `${d.name ?? d.id} (${d.kind})`).join(', ')}`);
+    }
+
     const repeated = nodes.filter((node) => node.loop);
     for (const node of repeated) {
       const loop = node.loop!;
@@ -99,6 +104,9 @@ export async function inspect(xml: string): Promise<CommandResult> {
 
   if (model.participants.length > 0) {
     lines.push(`participants: ${model.participants.map((p) => p.name ?? p.id).join(', ')}`);
+  }
+  if (model.dataStores.length > 0) {
+    lines.push(`data stores: ${model.dataStores.map((d) => d.name ?? d.id).join(', ')}`);
   }
   return { output: lines.join('\n'), exitCode: 0 };
 }

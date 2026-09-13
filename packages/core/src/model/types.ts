@@ -1,4 +1,4 @@
-import type { ElementKind, EventDefinitionKind } from './kinds.js';
+import type { DataElementKind, ElementKind, EventDefinitionKind } from './kinds.js';
 
 /**
  * Normalized, serializable BPMN model.
@@ -159,6 +159,22 @@ export interface DataMapping {
   to: string;
 }
 
+/**
+ * Data the diagram declares: a data object, a data store, or a reference to
+ * either. The engine does not move data through them — variables do that — but
+ * they are what the process says it works on, which a viewer or an editor
+ * shows and `ioSpecification` builds on.
+ */
+export interface DataElement {
+  id: string;
+  kind: DataElementKind;
+  name?: string;
+  /** Reference kinds: id of the data object or data store they point at. */
+  dataRef?: string;
+  /** Data objects declared as a collection (`isCollection="true"`). */
+  isCollection?: boolean;
+}
+
 /** A participant (pool) in a collaboration. */
 export interface Participant {
   id: string;
@@ -183,6 +199,8 @@ export interface ProcessModel {
   sequenceFlows: SequenceFlow[];
   /** Associations declared in the scope (compensation wiring). */
   associations?: Association[];
+  /** Data objects, data references and data stores declared in the scope. */
+  dataElements?: DataElement[];
 }
 
 /** Root of a parsed BPMN file: one or more processes plus collaboration info. */
@@ -192,4 +210,6 @@ export interface BpmnModel {
   processes: ProcessModel[];
   participants: Participant[];
   messageFlows: MessageFlow[];
+  /** `bpmn:dataStore` elements, which the spec declares outside any process. */
+  dataStores: DataElement[];
 }

@@ -230,6 +230,13 @@ describe('run with automation', () => {
   });
 });
 
+describe('inspect data elements', () => {
+  it('lists the data the process declares', async () => {
+    const result = await inspect(ORDER);
+    expect(result.output).toContain('data: itens (dataObject)');
+  });
+});
+
 describe('run on a collaboration', () => {
   it('runs the executable pool even when a black box comes first', async () => {
     const result = await run(COLLAB);
