@@ -81,9 +81,15 @@ export interface SessionStoreOptions {
  * every change is written through it and a session missing from the cache is
  * rebuilt from its stored state — so a restarted server picks executions up
  * exactly where they stopped.
+ *
+ * Every operation that touches an engine is queued per session, so concurrent
+ * requests on the same execution run one after the other instead of sharing
+ * the engine's ready queue. Different sessions never wait on each other.
  */
 export class SessionStore {
   private readonly cache = new Map<string, LiveSession>();
+  /** Tail of the pending work queued for each session, by session id. */
+  private readonly queues = new Map<string, Promise<void>>();
   private readonly storage: SessionStorage | undefined;
   private readonly handlers: Record<string, TaskHandler>;
   private readonly expressions: ExpressionMode;
@@ -92,6 +98,29 @@ export class SessionStore {
     this.storage = options.storage;
     this.handlers = options.handlers ?? {};
     this.expressions = options.expressions ?? 'safe';
+  }
+
+  /**
+   * Runs `task` after everything already queued for this session.
+   *
+   * The engine's contract is that tokens are processed one at a time, which
+   * two concurrent requests entering `drain()` would break: they would share
+   * the ready queue and answer each other's execution. Serializing per session
+   * keeps that invariant without blocking unrelated sessions.
+   */
+  private queued<T>(id: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.queues.get(id) ?? Promise.resolve();
+    const run = previous.then(task, task);
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.queues.set(id, tail);
+    void tail.then(() => {
+      // Only the last one out turns the light off.
+      if (this.queues.get(id) === tail) this.queues.delete(id);
+    });
+    return run;
   }
 
   /** Applies the store's automation to a freshly built engine. */
@@ -122,21 +151,27 @@ export class SessionStore {
   }
 
   async get(id: string): Promise<Session | undefined> {
-    const session = await this.load(id);
-    return session ? view(session) : undefined;
+    return this.queued(id, async () => {
+      const session = await this.load(id);
+      return session ? view(session) : undefined;
+    });
   }
 
   async complete(id: string, tokenId: string, output?: Record<string, unknown>): Promise<Session> {
-    const session = await this.require(id);
-    session.snapshot = await session.engine.completeTask(tokenId, output);
-    await this.persist(session);
-    return view(session);
+    return this.queued(id, async () => {
+      const session = await this.require(id);
+      session.snapshot = await session.engine.completeTask(tokenId, output);
+      await this.persist(session);
+      return view(session);
+    });
   }
 
   /** Work waiting on a person in one session. */
   async tasks(id: string, filter?: TaskFilter): Promise<PendingTask[]> {
-    const session = await this.require(id);
-    return session.engine.tasks(filter);
+    return this.queued(id, async () => {
+      const session = await this.require(id);
+      return session.engine.tasks(filter);
+    });
   }
 
   /**
@@ -154,25 +189,31 @@ export class SessionStore {
 
     const inbox: InboxTask[] = [];
     for (const id of ids) {
-      const session = await this.load(id);
-      if (!session) continue;
-      for (const task of session.engine.tasks(filter)) inbox.push({ sessionId: id, ...task });
+      const tasks = await this.queued(id, async () => {
+        const session = await this.load(id);
+        return session?.engine.tasks(filter) ?? [];
+      });
+      for (const task of tasks) inbox.push({ sessionId: id, ...task });
     }
     return inbox;
   }
 
   /** Activities of one session whose handler failed. */
   async incidents(id: string): Promise<IncidentState[]> {
-    const session = await this.require(id);
-    return session.engine.incidentList();
+    return this.queued(id, async () => {
+      const session = await this.require(id);
+      return session.engine.incidentList();
+    });
   }
 
   /** Runs a failed activity again. */
   async retry(id: string, tokenId: string): Promise<Session> {
-    const session = await this.require(id);
-    session.snapshot = await session.engine.retryTask(tokenId);
-    await this.persist(session);
-    return view(session);
+    return this.queued(id, async () => {
+      const session = await this.require(id);
+      session.snapshot = await session.engine.retryTask(tokenId);
+      await this.persist(session);
+      return view(session);
+    });
   }
 
   /** Gives up on a failed activity and moves the process on. */
@@ -181,18 +222,22 @@ export class SessionStore {
     tokenId: string,
     output?: Record<string, unknown>,
   ): Promise<Session> {
-    const session = await this.require(id);
-    session.snapshot = await session.engine.resolveIncident(tokenId, output);
-    await this.persist(session);
-    return view(session);
+    return this.queued(id, async () => {
+      const session = await this.require(id);
+      session.snapshot = await session.engine.resolveIncident(tokenId, output);
+      await this.persist(session);
+      return view(session);
+    });
   }
 
   /** Fires the timers of one session that are due at `now`. */
   async tick(id: string, now?: number): Promise<Session> {
-    const session = await this.require(id);
-    session.snapshot = await session.engine.tick(now);
-    await this.persist(session);
-    return view(session);
+    return this.queued(id, async () => {
+      const session = await this.require(id);
+      session.snapshot = await session.engine.tick(now);
+      await this.persist(session);
+      return view(session);
+    });
   }
 
   /**
@@ -217,16 +262,20 @@ export class SessionStore {
   }
 
   async signal(id: string, name: string, output?: Record<string, unknown>): Promise<Session> {
-    const session = await this.require(id);
-    session.snapshot = await session.engine.signal(name, output);
-    await this.persist(session);
-    return view(session);
+    return this.queued(id, async () => {
+      const session = await this.require(id);
+      session.snapshot = await session.engine.signal(name, output);
+      await this.persist(session);
+      return view(session);
+    });
   }
 
   async delete(id: string): Promise<boolean> {
-    const removedFromCache = this.cache.delete(id);
-    const removedFromStorage = (await this.storage?.remove(id)) ?? false;
-    return removedFromCache || removedFromStorage;
+    return this.queued(id, async () => {
+      const removedFromCache = this.cache.delete(id);
+      const removedFromStorage = (await this.storage?.remove(id)) ?? false;
+      return removedFromCache || removedFromStorage;
+    });
   }
 
   /**
