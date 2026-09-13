@@ -1,14 +1,10 @@
 import {
-  decisionsAfter,
-  evaluateCondition,
   findExecutableProcess,
   parseBpmn,
   processVariables,
   suggestVariables,
   WorkflowEngine,
   type BpmnModel,
-  type DecisionOption,
-  type DecisionPoint,
   type EngineMode,
   type ExecutionSnapshot,
   type FlowNode,
@@ -28,14 +24,8 @@ import 'bpmn-js/dist/assets/bpmn-font/css/bpmn.css';
 import './style.css';
 import { fetchSampleNames, fetchSampleXml, saveSample } from './api.js';
 import { BpmnEditor } from './editor.js';
-import {
-  formatValue,
-  StepPrompt,
-  type PromptChoice,
-  type PromptField,
-  type StepAnswer,
-  type StepRequest,
-} from './prompt.js';
+import { StepPrompt, type StepAnswer } from './prompt.js';
+import { flattenNodes, gatewayRequest, labelOf, nextStep, type GuidedContext } from './guided.js';
 
 const BUNDLED = import.meta.glob('../../../bpmn-files/*.bpmn', {
   query: '?raw',
@@ -146,19 +136,12 @@ async function loadSelectedSample(): Promise<void> {
 
 // --- Execution (run mode) ---------------------------------------------
 
-function flattenNodes(model: BpmnModel): Map<string, FlowNode> {
-  const map = new Map<string, FlowNode>();
-  const walk = (nodes: FlowNode[]): void => {
-    for (const node of nodes) {
-      map.set(node.id, node);
-      if (node.process) walk(node.process.flowNodes);
-    }
-  };
-  for (const process of model.processes) walk(process.flowNodes);
-  return map;
+/** O contexto que a execução conduzida precisa: motor, processo e nós. */
+function guidedContext(active: WorkflowEngine): GuidedContext {
+  return { engine: active, process: mainProcess(), nodesById };
 }
 
-const label = (nodeId: string): string => nodesById.get(nodeId)?.name ?? nodeId;
+const label = (nodeId: string): string => labelOf(nodesById, nodeId);
 
 function log(message: string): void {
   const item = document.createElement('li');
@@ -464,19 +447,10 @@ function finishGuided(): void {
   render(engine.snapshot());
 }
 
-/** O que perguntar numa parada, e o que fazer com a resposta. */
-interface Step {
-  request: StepRequest;
-  /** Resposta usada quando o operador pediu para seguir sem perguntar. */
-  defaults: Record<string, unknown>;
-  /** Gateways adiante cuja escolha este diálogo já cobre. */
-  decided: string[];
-  apply: (answer: StepAnswer) => Promise<ExecutionSnapshot>;
-}
-
 /** Pergunta a parada atual (ou responde sozinho) e devolve o estado seguinte. */
 async function answerStep(snapshot: ExecutionSnapshot): Promise<ExecutionSnapshot | undefined> {
-  const step = nextStep(snapshot);
+  if (!engine) return undefined;
+  const step = nextStep(guidedContext(engine), snapshot);
   if (!step) return undefined;
   const answer: StepAnswer = autoAnswer
     ? { action: 'confirm', values: step.defaults, choiceId: step.request.selected }
@@ -487,114 +461,6 @@ async function answerStep(snapshot: ExecutionSnapshot): Promise<ExecutionSnapsho
   // respondido aqui, e os valores informados é que vão decidir.
   for (const nodeId of step.decided) answeredGateways.add(nodeId);
   return step.apply(answer);
-}
-
-/** A primeira parada que depende de alguém de fora. */
-function nextStep(snapshot: ExecutionSnapshot): Step | undefined {
-  if (!engine) return undefined;
-  const active = engine;
-
-  const incident = active.incidentList()[0];
-  if (incident) {
-    return {
-      request: {
-        title: label(incident.nodeId),
-        reason: `A atividade falhou: ${incident.message}`,
-        badges: [`${incident.attempts} tentativa(s)`],
-        choices: [],
-        fields: [],
-        confirmLabel: 'Tentar de novo',
-      },
-      defaults: {},
-      decided: [],
-      apply: () => active.retryTask(incident.tokenId),
-    };
-  }
-
-  // tasks() também devolve gateway de evento e incidente; aqui só interessa o
-  // que uma pessoa conclui ou dispara.
-  const task = active.tasks({ reason: ['userTask', 'receiveTask', 'catchEvent'] })[0];
-  if (task) return taskStep(active, task);
-
-  const gateway = snapshot.tokens.find((token) => token.waitReason === 'eventBasedGateway');
-  if (gateway) return gatewayStep(active, gateway);
-
-  const timer = active.nextTimerAt();
-  if (timer === undefined) return undefined;
-  return {
-    request: {
-      title: 'Timer pendente',
-      reason: 'A execução só continua quando o relógio chegar lá.',
-      badges: [],
-      choices: [],
-      fields: [],
-      confirmLabel: 'Adiantar relógio',
-    },
-    defaults: {},
-    decided: [],
-    apply: () => active.tick(timer),
-  };
-}
-
-/** Tarefa parada: concluir (ou sinalizar) e responder o que vem logo depois. */
-function taskStep(active: WorkflowEngine, task: PendingTask): Step {
-  const trigger = task.reason === 'catchEvent' || task.reason === 'receiveTask';
-  const timer = timerOf(nodesById.get(task.nodeId));
-  const ahead = decisionPrompt(task.nodeId, task.variables);
-  return {
-    request: {
-      title: task.name ?? task.nodeId,
-      reason: timer
-        ? `Esperando o relógio: ${timer}.`
-        : trigger
-          ? 'Esperando um gatilho externo (mensagem, sinal).'
-          : 'Esperando alguém concluir a atividade.',
-      badges: [task.lane, ...task.candidates].filter((text): text is string => Boolean(text)),
-      choices: ahead.choices,
-      fields: ahead.fields,
-      selected: ahead.selected,
-      confirmLabel: timer ? 'Disparar agora' : trigger ? 'Sinalizar' : 'Concluir',
-    },
-    defaults: ahead.defaults,
-    decided: ahead.decided,
-    apply: (answer) =>
-      trigger
-        ? active.signal(task.nodeId, answer.values)
-        : active.completeTask(task.tokenId, answer.values),
-  };
-}
-
-/** Definição do timer do nó, quando ele espera o relógio. */
-function timerOf(node: FlowNode | undefined): string | undefined {
-  for (const detail of node?.events ?? (node?.event ? [node.event] : [])) {
-    if (detail.kind === 'timer') return detail.timer ?? 'timer';
-  }
-  return undefined;
-}
-
-/** Gateway baseado em evento: a escolha é qual gatilho chega primeiro. */
-function gatewayStep(active: WorkflowEngine, token: TokenSnapshot): Step {
-  const flows = mainProcess()?.sequenceFlows ?? [];
-  const choices: PromptChoice[] = [];
-  for (const flowId of nodesById.get(token.nodeId)?.outgoing ?? []) {
-    const flow = flows.find((candidate) => candidate.id === flowId);
-    if (flow) choices.push({ id: flow.targetRef, label: label(flow.targetRef) });
-  }
-  const first = choices[0]?.id;
-  return {
-    request: {
-      title: label(token.nodeId),
-      reason: 'Gateway baseado em evento: o primeiro gatilho a chegar decide o caminho.',
-      badges: [],
-      choices,
-      fields: [],
-      selected: first,
-      confirmLabel: 'Sinalizar',
-    },
-    defaults: {},
-    decided: [],
-    apply: (answer) => active.signal(answer.choiceId ?? first ?? token.nodeId),
-  };
 }
 
 /**
@@ -610,102 +476,13 @@ async function onGatewayDecision(decision: GatewayDecision): Promise<string | un
   if (stopRequested || autoAnswer) return undefined;
 
   renderTimers();
-  const answer = await prompt.ask(gatewayRequest(decision));
+  const answer = await prompt.ask(gatewayRequest(nodesById, decision));
   if (answer.action === 'stop') {
     stopRequested = true;
     return undefined;
   }
   if (answer.action === 'auto') autoAnswer = true;
   return answer.choiceId;
-}
-
-/** O diálogo de um gateway: os caminhos, e o que os dados escolheriam. */
-function gatewayRequest(decision: GatewayDecision): StepRequest {
-  const byData = decision.options.find((option) => option.flowId === decision.suggested[0]);
-  const name = (option: (typeof decision.options)[number]): string =>
-    option.name ?? label(option.targetId);
-  return {
-    title: decision.name ?? decision.nodeId,
-    reason: byData
-      ? `Pelas condições o processo iria para "${name(byData)}"; a escolha aqui vale mais.`
-      : 'Nenhuma condição fecha: escolha por onde seguir.',
-    badges: [],
-    choices: decision.options.map((option) => ({
-      id: option.flowId,
-      label: name(option),
-      hint: option.condition ?? (option.isDefault ? 'caminho padrão' : undefined),
-    })),
-    selected: decision.suggested[0],
-    fields: [],
-    confirmLabel: 'Seguir',
-  };
-}
-
-/**
- * As escolhas e os valores que a execução vai encontrar logo depois deste nó.
- * Só o primeiro ponto de decisão vira opções de caminho — os seguintes ainda
- * dependem do que for respondido aqui, então entram apenas como valores.
- */
-function decisionPrompt(
-  nodeId: string,
-  variables: Record<string, unknown>,
-): {
-  choices: PromptChoice[];
-  fields: PromptField[];
-  defaults: Record<string, unknown>;
-  decided: string[];
-  selected?: string;
-} {
-  const process = mainProcess();
-  const decisions = process ? decisionsAfter(process, nodeId) : [];
-  const choices: PromptChoice[] = [];
-  const fields: PromptField[] = [];
-  const defaults: Record<string, unknown> = {};
-  let selected: string | undefined;
-
-  decisions.forEach((decision, index) => {
-    const current = matchingOption(decision, variables);
-    if (index === 0) {
-      selected = current?.flowId;
-      for (const option of decision.options) {
-        choices.push({
-          id: option.flowId,
-          label: option.label,
-          hint: option.condition ?? (option.isDefault ? 'caminho padrão' : undefined),
-          assignments: option.assignments,
-        });
-      }
-    }
-    for (const name of decision.variables) {
-      if (fields.some((field) => field.name === name)) continue;
-      const value = Object.hasOwn(variables, name) ? variables[name] : current?.assignments[name];
-      if (value !== undefined) defaults[name] = value;
-      fields.push({
-        name,
-        value: formatValue(value),
-        hint: `lido em ${decision.name ?? decision.nodeId}`,
-      });
-    }
-  });
-  return {
-    choices,
-    fields,
-    defaults,
-    decided: decisions.map((decision) => decision.nodeId),
-    selected,
-  };
-}
-
-/** O caminho que as variáveis de agora já escolheriam. */
-function matchingOption(
-  decision: DecisionPoint,
-  variables: Record<string, unknown>,
-): DecisionOption | undefined {
-  const conditional = decision.options.filter((option) => !option.isDefault);
-  const match = conditional.find(
-    (option) => !option.condition || evaluateCondition(option.condition, variables),
-  );
-  return match ?? decision.options.find((option) => option.isDefault) ?? decision.options[0];
 }
 
 /** Liga/desliga as etiquetas de tempo médio por atividade. */
