@@ -1,5 +1,6 @@
 import { BpmnParseError } from './errors.js';
 import { isSafeExpression } from './engine/expression.js';
+import { isActivityKind } from './model/kinds.js';
 import { parseBpmn } from './parser/parse.js';
 import type { BpmnModel, FlowNode, ProcessModel } from './model/types.js';
 
@@ -15,7 +16,17 @@ export interface ValidationResult {
   model?: BpmnModel;
 }
 
-function validateProcess(process: ProcessModel, issues: ValidationIssue[]): void {
+/** Ids a reference may legitimately point at, gathered from the whole file. */
+interface ModelContext {
+  /** Every process id of the file, for `calledElement`. */
+  processIds: Set<string>;
+}
+
+function validateProcess(
+  process: ProcessModel,
+  issues: ValidationIssue[],
+  context: ModelContext,
+): void {
   const starts = process.flowNodes.filter((n) => n.kind === 'startEvent');
   const ends = process.flowNodes.filter((n) => n.kind === 'endEvent');
 
@@ -29,14 +40,79 @@ function validateProcess(process: ProcessModel, issues: ValidationIssue[]): void
     });
   }
 
+  const nodesById = new Map(process.flowNodes.map((node) => [node.id, node]));
+
   for (const node of process.flowNodes) {
     checkNode(node, issues);
     checkExpressions(node, issues);
-    if (node.process) validateProcess(node.process, issues);
+    checkReferences(node, nodesById, issues, context);
+    if (node.process) validateProcess(node.process, issues, context);
   }
 
   for (const flow of process.sequenceFlows) {
     checkExpression(flow.conditionExpression, `flow "${flow.id}"`, issues, flow.sourceRef);
+    checkFlowEnds(flow, nodesById, issues);
+  }
+}
+
+/**
+ * A sequence flow only connects nodes of its own scope. A reference to
+ * something outside it — a typo, or a connection drawn across a subprocess
+ * boundary — used to survive parsing and only surface at execution time, as a
+ * raw `Flow node not found` from the graph.
+ */
+function checkFlowEnds(
+  flow: { id: string; sourceRef: string; targetRef: string },
+  nodesById: Map<string, FlowNode>,
+  issues: ValidationIssue[],
+): void {
+  for (const [end, id] of [
+    ['source', flow.sourceRef],
+    ['target', flow.targetRef],
+  ] as const) {
+    if (nodesById.has(id)) continue;
+    issues.push({
+      severity: 'error',
+      message: `Sequence flow "${flow.id}" has an unknown ${end}: "${id}" is not a node of this scope.`,
+      nodeId: flow.id,
+    });
+  }
+}
+
+/** References a node makes to other elements: its host, its called process. */
+function checkReferences(
+  node: FlowNode,
+  nodesById: Map<string, FlowNode>,
+  issues: ValidationIssue[],
+  context: ModelContext,
+): void {
+  const where = `"${node.name ?? node.id}"`;
+
+  if (node.kind === 'boundaryEvent') {
+    const host = node.attachedToRef ? nodesById.get(node.attachedToRef) : undefined;
+    if (!node.attachedToRef || !host) {
+      issues.push({
+        severity: 'error',
+        message: node.attachedToRef
+          ? `Boundary event ${where} is attached to "${node.attachedToRef}", which is not a node of this scope.`
+          : `Boundary event ${where} is not attached to any activity.`,
+        nodeId: node.id,
+      });
+    } else if (!isActivityKind(host.kind)) {
+      issues.push({
+        severity: 'error',
+        message: `Boundary event ${where} is attached to "${host.id}", a ${host.kind}; boundary events only attach to activities.`,
+        nodeId: node.id,
+      });
+    }
+  }
+
+  if (node.calledElement && !context.processIds.has(node.calledElement)) {
+    issues.push({
+      severity: 'error',
+      message: `Call activity ${where} calls "${node.calledElement}", which no process of this file defines.`,
+      nodeId: node.id,
+    });
   }
 }
 
@@ -96,7 +172,18 @@ export function validateModel(model: BpmnModel): ValidationIssue[] {
   if (model.processes.length === 0) {
     issues.push({ severity: 'error', message: 'No process found in the model.' });
   }
-  for (const process of model.processes) validateProcess(process, issues);
+  const context: ModelContext = {
+    processIds: new Set(model.processes.map((process) => process.id)),
+  };
+  for (const process of model.processes) {
+    if (!process.isExecutable) {
+      issues.push({
+        severity: 'warning',
+        message: `Process "${process.name ?? process.id}" is not executable and will not run.`,
+      });
+    }
+    validateProcess(process, issues, context);
+  }
   return issues;
 }
 
