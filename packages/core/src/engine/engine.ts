@@ -502,6 +502,7 @@ export class WorkflowEngine {
         alternatives: choice.alternatives.map((alt) => ({ ...alt })),
       })),
       armedEvents: [...this.armedEvents],
+      firedConditionals: [...this.firedConditionals],
       timers: [...this.timers.values()].map((timer) => ({ ...timer })),
       compensations: this.compensations.map((entry) => ({ ...entry })),
       incidents: this.incidentList().map((incident) => ({ ...incident })),
@@ -657,6 +658,7 @@ export class WorkflowEngine {
     for (const [eventNodeId, tokenId] of state.armedEvents) {
       this.armedEvents.set(eventNodeId, tokenId);
     }
+    for (const key of state.firedConditionals ?? []) this.firedConditionals.add(key);
 
     for (const timer of state.timers) {
       this.timers.set(timerKey(timer.tokenId, timer.nodeId), { ...timer });

@@ -14,7 +14,7 @@ import type { EngineMode, ExecutionStatus, HistoryEntry, WaitReason } from './ty
  *
  * Bump {@link ENGINE_STATE_VERSION} whenever the shape changes.
  */
-export const ENGINE_STATE_VERSION = 7;
+export const ENGINE_STATE_VERSION = 8;
 
 /** Where a token currently sits, since not every token lives in a scope. */
 export type TokenPlacement =
@@ -149,4 +149,10 @@ export interface EngineState {
   incidents: IncidentState[];
   /** `eventNodeId -> tokenId` of the gateway waiting on that event. */
   armedEvents: [string, string][];
+  /**
+   * `boundaryId:hostTokenId` of the conditional boundary activations that
+   * already fired. Without them a restored execution would evaluate the same
+   * condition again and fire a second time.
+   */
+  firedConditionals: string[];
 }
