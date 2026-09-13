@@ -1,0 +1,64 @@
+name: Bug
+description: Algo não se comporta como a especificação (ou a documentação) diz.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Vulnerabilidade de segurança não vem por aqui — use
+        [security advisories](https://github.com/Bappoz/bpmn-flow/security/advisories/new).
+
+  - type: dropdown
+    id: package
+    attributes:
+      label: Pacote
+      options:
+        - '@bpmn-flow/core'
+        - '@bpmn-flow/viewer'
+        - '@bpmn-flow/server'
+        - '@bpmn-flow/cli'
+        - playground
+        - build / CI
+        - não sei
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: O que acontece
+      description: E o que você esperava que acontecesse.
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagram
+    attributes:
+      label: Diagrama que reproduz
+      description: |
+        O BPMN mínimo, sem layout. Anexe o arquivo ou cole o XML.
+      render: xml
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Como reproduzir
+      description: Código ou comando, com as variáveis usadas.
+      placeholder: |
+        bpmn-flow run diagrama.bpmn --vars '{"valor":2500}'
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Ambiente
+      placeholder: |
+        node -v:
+        versão do pacote (ou commit):
+        sistema:
+    validations:
+      required: true

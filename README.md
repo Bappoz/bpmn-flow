@@ -567,6 +567,13 @@ createApp({ expressions: 'javascript' });
 - **DMN está fora de escopo**: `businessRuleTask` é o ponto de extensão — ligue
   um handler ao seu motor de decisão.
 
+## Contribuindo
+
+Fluxo, gate de qualidade e convenção de commit em
+[`CONTRIBUTING.md`](CONTRIBUTING.md). Vulnerabilidade não vai para issue
+pública: [`SECURITY.md`](SECURITY.md) explica o canal e o modelo de confiança
+das expressões BPMN.
+
 ## Desenvolvimento
 
 ```bash
