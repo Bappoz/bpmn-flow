@@ -69,15 +69,29 @@ npm install
 npm run build
 ```
 
-Os pacotes ainda **não estão publicados no npm**. Para consumi-los em outro
-projeto hoje, use o repositório direto:
+Os pacotes ainda **não estão publicados no npm**. `npm install github:Bappoz/bpmn-flow`
+não serve: a raiz é o workspace do monorepo, é `private` e não exporta nada.
+
+Para consumir em outro projeto hoje, clone, builde e ligue o pacote que você
+quer:
 
 ```bash
-npm install github:Bappoz/bpmn-flow
+git clone https://github.com/Bappoz/bpmn-flow.git
+cd bpmn-flow
+npm ci                                  # instala e builda (script `prepare`)
+npm link -w @bpmn-flow/core             # e/ou viewer, server, cli
 ```
 
-Quando forem publicados, a instalação será por pacote (`@bpmn-flow/core`,
-`@bpmn-flow/viewer`).
+```bash
+cd ../seu-projeto
+npm link @bpmn-flow/core
+```
+
+Quando forem publicados, a instalação será por pacote:
+
+```bash
+npm install @bpmn-flow/core @bpmn-flow/viewer   # ainda não disponível
+```
 
 ## Início rápido: usar como biblioteca
 

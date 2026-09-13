@@ -10,13 +10,14 @@ Obrigado pelo interesse. Este é um monorepo npm workspaces com quatro pacotes
 ```bash
 git clone https://github.com/Bappoz/bpmn-flow.git
 cd bpmn-flow
-npm ci
+npm ci           # instala e builda (script `prepare`)
 npm run verify   # build + format + lint + typecheck + test
 npm run dev      # playground (o Vite imprime a URL)
 ```
 
-Node 20 ou 22 — o `.nvmrc` fixa 22, e o CI verifica as duas. O build vem antes do typecheck porque os pacotes se
-checam pelos tipos gerados uns dos outros.
+Node 20 ou 22 — o `.nvmrc` fixa 22, e o CI verifica as duas. O `npm ci` já
+builda porque o playground e os testes de tipo consomem os `dist/` uns dos
+outros; o build vem antes do typecheck pelo mesmo motivo.
 
 ## O gate
 
