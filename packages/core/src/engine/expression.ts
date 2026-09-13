@@ -57,6 +57,11 @@ function compile(expression: string): (scope: Record<string, unknown>) => unknow
 
   // `with` over a proxy: the `has` trap claims every non-global identifier so
   // unknown names resolve to `undefined` rather than raising a ReferenceError.
+  //
+  // Compiling the diagram's expression is the whole point of the `javascript`
+  // mode, and its documented cost: it trusts the definition as much as the
+  // surrounding code. Untrusted XML goes through the safe evaluator instead.
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
   const fn = new Function(
     'scope',
     `with (scope) { try { return (${body(expression)}); } catch { return undefined; } }`,
@@ -69,7 +74,8 @@ function compile(expression: string): (scope: Record<string, unknown>) => unknow
 function scopeFor(variables: Record<string, unknown>): Record<string, unknown> {
   return new Proxy(variables, {
     has: (target, key) => Reflect.has(target, key) || !(key in globalThis),
-    get: (target, key) => (key === Symbol.unscopables ? undefined : Reflect.get(target, key)),
+    get: (target, key): unknown =>
+      key === Symbol.unscopables ? undefined : Reflect.get(target, key),
   });
 }
 

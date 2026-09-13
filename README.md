@@ -600,7 +600,7 @@ npm run dev         # sobe o playground em modo de desenvolvimento
 ```
 
 ```bash
-npm run verify      # build + format + lint + typecheck + test, falhando no primeiro erro
+npm run verify      # build + format + lint + typecheck + coverage, falhando no primeiro erro
 ```
 
 `verify` é exatamente o que o CI roda, na mesma ordem — o build vem primeiro

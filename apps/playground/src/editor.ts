@@ -59,7 +59,8 @@ export class BpmnEditor {
   }
 
   fit(): void {
-    (this.modeler.get('canvas') as Canvas).zoom('fit-viewport');
+    // `get` is generic over the module's type: name it instead of asserting.
+    this.modeler.get<Canvas>('canvas').zoom('fit-viewport');
   }
 
   destroy(): void {

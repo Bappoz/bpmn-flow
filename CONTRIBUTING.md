@@ -11,7 +11,7 @@ Obrigado pelo interesse. Este é um monorepo npm workspaces com quatro pacotes
 git clone https://github.com/Bappoz/bpmn-flow.git
 cd bpmn-flow
 npm ci           # instala e builda (script `prepare`)
-npm run verify   # build + format + lint + typecheck + test
+npm run verify   # build + format + lint + typecheck + coverage
 npm run dev      # playground (o Vite imprime a URL)
 ```
 
@@ -31,7 +31,7 @@ npm run format       # Prettier escreve
 npm run lint         # ESLint
 npm run typecheck    # tsc --noEmit em cada workspace
 npm test             # Vitest (packages/* e apps/*)
-npm run coverage     # com relatório de cobertura
+npm run coverage     # com relatório e os limiares que o CI cobra
 ```
 
 ## Fluxo

@@ -1,0 +1,12 @@
+{
+  // Program the linter type-checks against: the sources the build compiles plus
+  // the tests and the tooling configs, which no build tsconfig includes.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false
+  },
+  "include": ["*.ts"]
+}

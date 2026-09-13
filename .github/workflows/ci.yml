@@ -39,6 +39,10 @@ jobs:
       - name: Test
         run: npm test
 
+      # Fails when coverage drops below the thresholds in vitest.config.ts.
+      - name: Coverage
+        run: npm run coverage
+
       # Fails on high and critical only. One moderate is accepted and tracked:
       # mxgraph's setTooltips XSS, reached through bpmn-visualization, has no
       # upstream fix and the viewer does not call it. See SECURITY.md.

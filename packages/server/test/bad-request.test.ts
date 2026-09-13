@@ -30,9 +30,8 @@ describe('malformed request bodies', () => {
   it('answers 400 when xml is missing', async () => {
     const res = await post('/api/parse', JSON.stringify({}));
     expect(res.status).toBe(400);
-    expect((await res.json()) as { error: string }).toMatchObject({
-      error: expect.stringContaining('xml') as unknown as string,
-    });
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain('xml');
   });
 
   it('answers 400 when tokenId is missing on complete', async () => {

@@ -31,7 +31,7 @@ const BUNDLED = import.meta.glob('../../../bpmn-files/*.bpmn', {
   query: '?raw',
   import: 'default',
   eager: true,
-}) as Record<string, string>;
+});
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -275,7 +275,7 @@ function addEventGatewayButtons(token: TokenSnapshot): void {
   const node = nodesById.get(token.nodeId);
   for (const flowId of node?.outgoing ?? []) {
     const flow = mainProcess()?.sequenceFlows.find((f) => f.id === flowId);
-    if (flow) actionButton(`Sinalizar ${label(flow.targetRef)}`, () => signal(flow.targetRef));
+    if (flow) actionButton(`Sinalizar ${label(flow.targetRef)}`, () => void signal(flow.targetRef));
   }
 }
 
@@ -643,9 +643,11 @@ async function setMode(mode: 'run' | 'edit'): Promise<void> {
 // --- Wiring ------------------------------------------------------------
 
 els.sample.addEventListener('change', () => void loadSelectedSample());
-els.file.addEventListener('change', async () => {
-  const file = els.file.files?.[0];
-  if (file) await loadDiagram(await file.text());
+els.file.addEventListener('change', () => {
+  void (async () => {
+    const file = els.file.files?.[0];
+    if (file) await loadDiagram(await file.text());
+  })();
 });
 els.start.addEventListener('click', () => void start());
 els.autorun.addEventListener('click', () => void autorun());
@@ -659,18 +661,22 @@ els.metrics.addEventListener('click', () => toggleMetrics());
 
 els.modeRun.addEventListener('click', () => void setMode('run'));
 els.modeEdit.addEventListener('click', () => void setMode('edit'));
-els.newDiagram.addEventListener('click', async () => {
-  const active = await ensureEditor();
-  await active.newDiagram();
-  editorXml = currentXml;
-  validationMessage('Novo diagrama criado.', true);
+els.newDiagram.addEventListener('click', () => {
+  void (async () => {
+    const active = await ensureEditor();
+    await active.newDiagram();
+    editorXml = currentXml;
+    validationMessage('Novo diagrama criado.', true);
+  })();
 });
-els.editFile.addEventListener('change', async () => {
-  const file = els.editFile.files?.[0];
-  if (!file) return;
-  const xml = await file.text();
-  await (await ensureEditor()).open(xml);
-  editorXml = xml;
+els.editFile.addEventListener('change', () => {
+  void (async () => {
+    const file = els.editFile.files?.[0];
+    if (!file) return;
+    const xml = await file.text();
+    await (await ensureEditor()).open(xml);
+    editorXml = xml;
+  })();
 });
 els.validate.addEventListener('click', () => void validate());
 els.save.addEventListener('click', () => void save());
