@@ -141,6 +141,9 @@ Serve também exemplos `.bpmn` e assets estáticos com fallback de SPA.
   tarefa comum, sem instanciar o processo chamado.
 - A junção inclusiva usa alcançabilidade estrutural, adequada para modelos bem
   formados; topologias muito irregulares podem exigir revisão.
+- O `CollaborationEngine` compõe um `WorkflowEngine` por pool e roteia os
+  `messageFlow` entre eles; ele não é um motor novo, é uma fachada. O servidor
+  HTTP ainda trabalha com um pool por sessão.
 - Mapeamento de dados (`ioSpecification`) e DMN continuam fora do escopo do
   motor. Correlação de mensagem existe pela chave em `extensionElements`; o
   mecanismo padrão (`correlationSubscription`) não.

@@ -1061,3 +1061,39 @@ export const MESSAGE_CORRELATION_RECEIVE_TASK = `<?xml version="1.0" encoding="U
     <bpmn:sequenceFlow id="f1" sourceRef="Receber" targetRef="End" />
   </bpmn:process>
 </bpmn:definitions>`;
+
+/**
+ * Two executable pools wired by message flows in both directions: the customer
+ * sends an order, the shop confirms it. Neither pool can finish alone.
+ */
+export const COLLABORATION_TWO_POOLS = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions ${NS} id="Defs">
+  <bpmn:collaboration id="Collab">
+    <bpmn:participant id="PartCliente" name="Cliente" processRef="Cliente" />
+    <bpmn:participant id="PartLoja" name="Loja" processRef="Loja" />
+    <bpmn:messageFlow id="mfPedido" name="Pedido" sourceRef="EnviarPedido" targetRef="ReceberPedido" />
+    <bpmn:messageFlow id="mfOk" name="Confirmacao" sourceRef="Confirmar" targetRef="ReceberOk" />
+  </bpmn:collaboration>
+  <bpmn:process id="Cliente" name="Cliente" isExecutable="true">
+    <bpmn:startEvent id="C1" />
+    <bpmn:sendTask id="EnviarPedido" name="Enviar pedido" />
+    <bpmn:intermediateCatchEvent id="ReceberOk" name="Receber confirmacao">
+      <bpmn:messageEventDefinition />
+    </bpmn:intermediateCatchEvent>
+    <bpmn:endEvent id="C2" />
+    <bpmn:sequenceFlow id="c1" sourceRef="C1" targetRef="EnviarPedido" />
+    <bpmn:sequenceFlow id="c2" sourceRef="EnviarPedido" targetRef="ReceberOk" />
+    <bpmn:sequenceFlow id="c3" sourceRef="ReceberOk" targetRef="C2" />
+  </bpmn:process>
+  <bpmn:process id="Loja" name="Loja" isExecutable="true">
+    <bpmn:startEvent id="L1" />
+    <bpmn:receiveTask id="ReceberPedido" name="Receber pedido" />
+    <bpmn:userTask id="Separar" name="Separar itens" />
+    <bpmn:sendTask id="Confirmar" name="Confirmar" />
+    <bpmn:endEvent id="L2" />
+    <bpmn:sequenceFlow id="l1" sourceRef="L1" targetRef="ReceberPedido" />
+    <bpmn:sequenceFlow id="l2" sourceRef="ReceberPedido" targetRef="Separar" />
+    <bpmn:sequenceFlow id="l3" sourceRef="Separar" targetRef="Confirmar" />
+    <bpmn:sequenceFlow id="l4" sourceRef="Confirmar" targetRef="L2" />
+  </bpmn:process>
+</bpmn:definitions>`;

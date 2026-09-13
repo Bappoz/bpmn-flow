@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { inspect, run, validate } from '../src/index.js';
+import { parseBpmn } from '@bpmn-flow/core';
+import { inspect, isCollaboration, run, runCollaboration, validate } from '../src/index.js';
 
 const ORDER = `<?xml version="1.0" encoding="UTF-8"?>
 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
@@ -242,5 +243,46 @@ describe('run on a collaboration', () => {
     const result = await run(COLLAB);
     expect(result.exitCode).toBe(0);
     expect(result.output).toContain('completed');
+  });
+});
+
+const COLLAB_TWO_POOLS = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  targetNamespace="http://bpmn-flow.test" id="Defs">
+  <bpmn:collaboration id="Collab">
+    <bpmn:participant id="PartCliente" name="Cliente" processRef="Cliente" />
+    <bpmn:participant id="PartLoja" name="Loja" processRef="Loja" />
+    <bpmn:messageFlow id="mf1" name="Pedido" sourceRef="Enviar" targetRef="Receber" />
+  </bpmn:collaboration>
+  <bpmn:process id="Cliente" name="Cliente" isExecutable="true">
+    <bpmn:startEvent id="C1" />
+    <bpmn:sendTask id="Enviar" name="Enviar" />
+    <bpmn:endEvent id="C2" />
+    <bpmn:sequenceFlow id="c1" sourceRef="C1" targetRef="Enviar" />
+    <bpmn:sequenceFlow id="c2" sourceRef="Enviar" targetRef="C2" />
+  </bpmn:process>
+  <bpmn:process id="Loja" name="Loja" isExecutable="true">
+    <bpmn:startEvent id="L1" />
+    <bpmn:receiveTask id="Receber" name="Receber" />
+    <bpmn:endEvent id="L2" />
+    <bpmn:sequenceFlow id="l1" sourceRef="L1" targetRef="Receber" />
+    <bpmn:sequenceFlow id="l2" sourceRef="Receber" targetRef="L2" />
+  </bpmn:process>
+</bpmn:definitions>`;
+
+describe('runCollaboration', () => {
+  it('executes both pools and routes the message flow', async () => {
+    const result = await runCollaboration(COLLAB_TWO_POOLS);
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toContain('pool Cliente (Cliente): completed');
+    expect(result.output).toContain('pool Loja (Loja): completed');
+    expect(result.output).toContain('Pedido: Cliente -> Loja (Receber)');
+    expect(result.collaboration.status).toBe('completed');
+  });
+
+  it('recognizes a collaboration from the model', async () => {
+    expect(isCollaboration(await parseBpmn(COLLAB_TWO_POOLS))).toBe(true);
+    expect(isCollaboration(await parseBpmn(ORDER))).toBe(false);
+    expect(isCollaboration(await parseBpmn(COLLAB))).toBe(false);
   });
 });
