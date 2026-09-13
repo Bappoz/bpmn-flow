@@ -967,3 +967,50 @@ export const COLLABORATION_ALL_BLACKBOX = `<?xml version="1.0" encoding="UTF-8"?
     <bpmn:startEvent id="Start" />
   </bpmn:process>
 </bpmn:definitions>`;
+
+/**
+ * A catch event and a boundary event that both declare two message triggers and
+ * ask for `parallelMultiple`: the spec requires every trigger to arrive.
+ */
+export const PARALLEL_MULTIPLE = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions ${NS} id="Defs">
+  <bpmn:message id="MsgPago" name="pago" />
+  <bpmn:message id="MsgNota" name="nota" />
+  <bpmn:process id="P" isExecutable="true">
+    <bpmn:startEvent id="Start" />
+    <bpmn:intermediateCatchEvent id="Aguardar" parallelMultiple="true">
+      <bpmn:messageEventDefinition messageRef="MsgPago" />
+      <bpmn:messageEventDefinition messageRef="MsgNota" />
+    </bpmn:intermediateCatchEvent>
+    <bpmn:task id="Expedir" />
+    <bpmn:endEvent id="End" />
+    <bpmn:sequenceFlow id="f0" sourceRef="Start" targetRef="Aguardar" />
+    <bpmn:sequenceFlow id="f1" sourceRef="Aguardar" targetRef="Expedir" />
+    <bpmn:sequenceFlow id="f2" sourceRef="Expedir" targetRef="End" />
+  </bpmn:process>
+</bpmn:definitions>`;
+
+/** Same triggers, without `parallelMultiple`: the first one that lands fires. */
+export const ANY_MULTIPLE = PARALLEL_MULTIPLE.replace(' parallelMultiple="true"', '');
+
+/** Boundary event that only interrupts once both triggers arrived. */
+export const PARALLEL_MULTIPLE_BOUNDARY = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions ${NS} id="Defs">
+  <bpmn:message id="MsgPago" name="pago" />
+  <bpmn:message id="MsgNota" name="nota" />
+  <bpmn:process id="P" isExecutable="true">
+    <bpmn:startEvent id="Start" />
+    <bpmn:userTask id="Conferir" />
+    <bpmn:boundaryEvent id="Ambos" attachedToRef="Conferir" parallelMultiple="true">
+      <bpmn:messageEventDefinition messageRef="MsgPago" />
+      <bpmn:messageEventDefinition messageRef="MsgNota" />
+    </bpmn:boundaryEvent>
+    <bpmn:task id="Acelerar" />
+    <bpmn:endEvent id="End" />
+    <bpmn:endEvent id="EndAlt" />
+    <bpmn:sequenceFlow id="f0" sourceRef="Start" targetRef="Conferir" />
+    <bpmn:sequenceFlow id="f1" sourceRef="Conferir" targetRef="End" />
+    <bpmn:sequenceFlow id="fb" sourceRef="Ambos" targetRef="Acelerar" />
+    <bpmn:sequenceFlow id="fb2" sourceRef="Acelerar" targetRef="EndAlt" />
+  </bpmn:process>
+</bpmn:definitions>`;

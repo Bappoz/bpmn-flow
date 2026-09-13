@@ -89,6 +89,8 @@ export interface MdElement {
   eventDefinitions?: MdEventDefinition[];
   attachedToRef?: MdRef;
   cancelActivity?: boolean;
+  /** Multiple events: does the event need every trigger, or just one? */
+  parallelMultiple?: boolean;
   /** Start event of an event subprocess: does it cancel the enclosing scope? */
   isInterrupting?: boolean;
 

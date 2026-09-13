@@ -220,6 +220,7 @@ function readScope(elements: MdElement[]): ScopeAccumulator {
       const details = readEventDetails(el.eventDefinitions);
       node.event = details[0];
       node.events = details;
+      if (el.parallelMultiple === true && details.length > 1) node.parallelMultiple = true;
     }
     if (kind === 'boundaryEvent') {
       if (el.attachedToRef?.id) node.attachedToRef = el.attachedToRef.id;

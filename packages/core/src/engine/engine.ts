@@ -15,6 +15,7 @@ import { BpmnError, HandlerRegistry, type TaskHandler } from './handlers.js';
 import {
   ENGINE_STATE_VERSION,
   type EngineState,
+  type MultiTriggerState,
   type IncidentState,
   type ScopeState,
   type TokenState,
@@ -127,6 +128,8 @@ export class WorkflowEngine {
   private readonly incidents = new Map<string, IncidentState>();
   /** `boundaryId:hostTokenId` of conditional boundaries already fired. */
   private readonly firedConditionals = new Set<string>();
+  /** Triggers collected so far by each waiting `parallelMultiple` event. */
+  private readonly multiTriggers = new Map<string, Set<string>>();
   /** Pending timers keyed by `tokenId:nodeId`. */
   private readonly timers = new Map<string, TimerState>();
   private readonly armedEvents = new Map<string, string>();
@@ -503,6 +506,10 @@ export class WorkflowEngine {
       })),
       armedEvents: [...this.armedEvents],
       firedConditionals: [...this.firedConditionals],
+      multiTriggers: [...this.multiTriggers].map(([key, received]): MultiTriggerState => ({
+        key,
+        received: [...received],
+      })),
       timers: [...this.timers.values()].map((timer) => ({ ...timer })),
       compensations: this.compensations.map((entry) => ({ ...entry })),
       incidents: this.incidentList().map((incident) => ({ ...incident })),
@@ -659,6 +666,9 @@ export class WorkflowEngine {
       this.armedEvents.set(eventNodeId, tokenId);
     }
     for (const key of state.firedConditionals ?? []) this.firedConditionals.add(key);
+    for (const entry of state.multiTriggers ?? []) {
+      this.multiTriggers.set(entry.key, new Set(entry.received));
+    }
 
     for (const timer of state.timers) {
       this.timers.set(timerKey(timer.tokenId, timer.nodeId), { ...timer });
@@ -867,6 +877,9 @@ export class WorkflowEngine {
 
     const token = this.waiting.get(entry.tokenId);
     if (!token || token.waiting !== 'catchEvent' || token.nodeId !== entry.nodeId) return false;
+    const node = token.scope.graph.node(token.nodeId);
+    // The timer is one trigger among several on a parallel multiple event.
+    if (node && !this.recordTrigger(node, `${node.id}:${token.id}`, 'timer')) return false;
     this.waiting.delete(token.id);
     token.waiting = undefined;
     this.completeNode(token);
@@ -1778,25 +1791,64 @@ export class WorkflowEngine {
   }
 
   /**
+   * Records one trigger against an event and answers whether it may now fire.
+   *
+   * A plain multiple event fires on the first trigger that reaches it. One
+   * marked `parallelMultiple` collects them instead and only opens once every
+   * declared trigger arrived, which is what the specification asks for;
+   * `gateKey` is what tells two activations of the same event apart.
+   */
+  private recordTrigger(node: FlowNode, gateKey: string, triggerKey: string): boolean {
+    if (node.parallelMultiple !== true) return true;
+    const required = requiredTriggerKeys(node);
+    if (required.length <= 1) return true;
+
+    const received = this.multiTriggers.get(gateKey) ?? new Set<string>();
+    received.add(triggerKey);
+    if (!required.every((key) => received.has(key))) {
+      this.multiTriggers.set(gateKey, received);
+      return false;
+    }
+    this.multiTriggers.delete(gateKey);
+    return true;
+  }
+
+  /**
+   * Whether a delivered signal opens this event. Addressing it by its own id
+   * fires it outright: that names the event, not one of its triggers.
+   */
+  private signalOpens(node: FlowNode, gateKey: string, nameOrId: string): boolean {
+    if (node.id === nameOrId) {
+      this.multiTriggers.delete(gateKey);
+      return true;
+    }
+    return this.recordTrigger(node, gateKey, triggerKeyFor(node, nameOrId));
+  }
+
+  /**
    * Delivers a trigger to **every** subscriber that matches, as the
    * specification requires of a signal: parked catch events, armed
    * event-based gateway alternatives, boundary events and event subprocesses.
    */
   private deliverSignal(nameOrId: string): boolean {
+    // A trigger absorbed by a parallel multiple event that is still short of
+    // the rest was delivered too: it just did not move anything yet.
     let delivered = false;
 
     // 1. Parked catch events and receive tasks (by node id or event reference).
-    const parked = [...this.waiting.values()].filter((token) => {
-      if (token.waiting !== 'catchEvent' && token.waiting !== 'receiveTask') return false;
+    const parked: RuntimeToken[] = [];
+    for (const token of this.waiting.values()) {
+      if (token.waiting !== 'catchEvent' && token.waiting !== 'receiveTask') continue;
       const node = token.scope.graph.node(token.nodeId);
-      return node ? matchesTrigger(node, nameOrId) : false;
-    });
+      if (!node || !matchesTrigger(node, nameOrId)) continue;
+      delivered = true;
+      if (this.signalOpens(node, `${node.id}:${token.id}`, nameOrId)) parked.push(token);
+    }
     for (const token of parked) {
       this.waiting.delete(token.id);
       token.waiting = undefined;
       this.completeNode(token);
       this.leaveViaOutgoing(token);
-      delivered = true;
     }
 
     // 2. Event-based gateway alternatives.
@@ -1813,7 +1865,15 @@ export class WorkflowEngine {
     if (this.fireBoundaryBySignal(nameOrId)) delivered = true;
 
     // 4. Event subprocesses listening for this trigger.
-    if (this.startEventSubProcesses((start) => matchesTrigger(start, nameOrId))) delivered = true;
+    if (
+      this.startEventSubProcesses(
+        (start, scope) =>
+          matchesTrigger(start, nameOrId) &&
+          this.signalOpens(start, `${start.id}:${scope.id}`, nameOrId),
+      )
+    ) {
+      delivered = true;
+    }
 
     return delivered;
   }
@@ -1823,7 +1883,7 @@ export class WorkflowEngine {
    * one cancels the work of the scope that declares it; a non-interrupting one
    * runs alongside it.
    */
-  private startEventSubProcesses(matches: (start: FlowNode) => boolean): boolean {
+  private startEventSubProcesses(matches: (start: FlowNode, host: Scope) => boolean): boolean {
     let started = false;
     for (const scope of [...this.scopes]) {
       // Loop instance scopes share their parent's graph: only look once.
@@ -1838,7 +1898,7 @@ export class WorkflowEngine {
         const graph = new ProcessGraph(node.process);
         const start = graph
           .allNodes()
-          .find((candidate) => candidate.kind === 'startEvent' && matches(candidate));
+          .find((candidate) => candidate.kind === 'startEvent' && matches(candidate, scope));
         if (!start) continue;
         this.launchEventSubProcess(scope, node, graph, start);
         started = true;
@@ -1880,15 +1940,21 @@ export class WorkflowEngine {
     this.leaveViaOutgoing(chosen);
   }
 
+  /** Reports whether any boundary event took the trigger, fired or not. */
   private fireBoundaryBySignal(nameOrId: string): boolean {
+    let delivered = false;
     for (const scope of this.scopes) {
       for (const node of scope.graph.allNodes()) {
         if (node.kind !== 'boundaryEvent' || !node.attachedToRef) continue;
-        if (node.id !== nameOrId && node.event?.reference !== nameOrId) continue;
+        if (node.id !== nameOrId && !detailsOf(node).some((d) => d.reference === nameOrId)) {
+          continue;
+        }
+        delivered = true;
+        if (!this.signalOpens(node, `${node.id}:${scope.id}`, nameOrId)) continue;
         if (this.fireBoundary(scope, node)) return true;
       }
     }
-    return false;
+    return delivered;
   }
 
   /**
@@ -2242,6 +2308,21 @@ function matchesFilter(task: PendingTask, filter: TaskFilter): boolean {
 /** Every event definition declared on a node (one `none` when it declares none). */
 function detailsOf(node: FlowNode): EventDetail[] {
   return node.events ?? (node.event ? [node.event] : []);
+}
+
+/**
+ * The trigger keys a `parallelMultiple` event waits for: one per declared
+ * definition. A definition without a reference (a timer, a conditional) is
+ * identified by its kind, which is as far apart as two of them can be told.
+ */
+function requiredTriggerKeys(node: FlowNode): string[] {
+  return [...new Set(detailsOf(node).map((detail) => detail.reference ?? detail.kind))];
+}
+
+/** Which of the node's declared triggers a delivered name satisfies. */
+function triggerKeyFor(node: FlowNode, nameOrId: string): string {
+  const detail = detailsOf(node).find((candidate) => candidate.reference === nameOrId);
+  return detail ? (detail.reference ?? detail.kind) : nameOrId;
 }
 
 /** A trigger matches a node by its id, its message, or any event reference. */

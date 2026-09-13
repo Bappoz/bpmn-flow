@@ -86,6 +86,12 @@ export interface FlowNode {
   /** Every event definition declared on the event, in document order. */
   events?: EventDetail[];
 
+  /**
+   * Multiple events: every declared trigger has to arrive before the event
+   * fires. Without it (the specification's default) the first one is enough.
+   */
+  parallelMultiple?: boolean;
+
   /** Boundary events: id of the activity they are attached to. */
   attachedToRef?: string;
   /** Boundary events: false for non-interrupting boundary events. */
