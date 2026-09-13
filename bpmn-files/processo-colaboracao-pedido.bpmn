@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+                  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+                  id="Definitions_Colaboracao"
+                  targetNamespace="http://bpmn.io/schema/bpmn">
+
+  <bpmn:collaboration id="Colaboracao_Pedido">
+    <bpmn:participant id="Participant_Cliente" name="Cliente" processRef="Processo_Cliente" />
+    <bpmn:participant id="Participant_Loja" name="Loja" processRef="Processo_Loja" />
+    <bpmn:messageFlow id="MessageFlow_Pedido" name="Pedido"
+                      sourceRef="Cliente_Enviar" targetRef="Loja_Receber" />
+    <bpmn:messageFlow id="MessageFlow_Confirmacao" name="Confirmação"
+                      sourceRef="Loja_Confirmar" targetRef="Cliente_ReceberConfirmacao" />
+  </bpmn:collaboration>
+
+  <bpmn:process id="Processo_Cliente" name="Cliente" isExecutable="true">
+    <bpmn:startEvent id="Cliente_Inicio" name="Precisa comprar">
+      <bpmn:outgoing>Cliente_f1</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:sendTask id="Cliente_Enviar" name="Enviar pedido">
+      <bpmn:incoming>Cliente_f1</bpmn:incoming>
+      <bpmn:outgoing>Cliente_f2</bpmn:outgoing>
+    </bpmn:sendTask>
+    <bpmn:intermediateCatchEvent id="Cliente_ReceberConfirmacao" name="Confirmação recebida">
+      <bpmn:incoming>Cliente_f2</bpmn:incoming>
+      <bpmn:outgoing>Cliente_f3</bpmn:outgoing>
+      <bpmn:messageEventDefinition id="Cliente_MsgDef" />
+    </bpmn:intermediateCatchEvent>
+    <bpmn:endEvent id="Cliente_Fim" name="Pedido confirmado">
+      <bpmn:incoming>Cliente_f3</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="Cliente_f1" sourceRef="Cliente_Inicio" targetRef="Cliente_Enviar" />
+    <bpmn:sequenceFlow id="Cliente_f2" sourceRef="Cliente_Enviar" targetRef="Cliente_ReceberConfirmacao" />
+    <bpmn:sequenceFlow id="Cliente_f3" sourceRef="Cliente_ReceberConfirmacao" targetRef="Cliente_Fim" />
+  </bpmn:process>
+
+  <bpmn:process id="Processo_Loja" name="Loja" isExecutable="true">
+    <bpmn:startEvent id="Loja_Inicio" name="Loja aberta">
+      <bpmn:outgoing>Loja_f1</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:receiveTask id="Loja_Receber" name="Receber pedido">
+      <bpmn:incoming>Loja_f1</bpmn:incoming>
+      <bpmn:outgoing>Loja_f2</bpmn:outgoing>
+    </bpmn:receiveTask>
+    <bpmn:userTask id="Loja_Separar" name="Separar itens">
+      <bpmn:incoming>Loja_f2</bpmn:incoming>
+      <bpmn:outgoing>Loja_f3</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:sendTask id="Loja_Confirmar" name="Confirmar pedido">
+      <bpmn:incoming>Loja_f3</bpmn:incoming>
+      <bpmn:outgoing>Loja_f4</bpmn:outgoing>
+    </bpmn:sendTask>
+    <bpmn:endEvent id="Loja_Fim" name="Pedido atendido">
+      <bpmn:incoming>Loja_f4</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="Loja_f1" sourceRef="Loja_Inicio" targetRef="Loja_Receber" />
+    <bpmn:sequenceFlow id="Loja_f2" sourceRef="Loja_Receber" targetRef="Loja_Separar" />
+    <bpmn:sequenceFlow id="Loja_f3" sourceRef="Loja_Separar" targetRef="Loja_Confirmar" />
+    <bpmn:sequenceFlow id="Loja_f4" sourceRef="Loja_Confirmar" targetRef="Loja_Fim" />
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Colaboracao_Pedido">
+      <bpmndi:BPMNShape id="Shape_Participant_Cliente" bpmnElement="Participant_Cliente" isHorizontal="true">
+        <dc:Bounds x="160" y="80" width="740" height="180" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Cliente_Inicio" bpmnElement="Cliente_Inicio">
+        <dc:Bounds x="230" y="152" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Cliente_Enviar" bpmnElement="Cliente_Enviar">
+        <dc:Bounds x="330" y="130" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Cliente_ReceberConfirmacao" bpmnElement="Cliente_ReceberConfirmacao">
+        <dc:Bounds x="530" y="152" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Cliente_Fim" bpmnElement="Cliente_Fim">
+        <dc:Bounds x="660" y="152" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="Edge_Cliente_f1" bpmnElement="Cliente_f1">
+        <di:waypoint x="266" y="170" />
+        <di:waypoint x="330" y="170" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Cliente_f2" bpmnElement="Cliente_f2">
+        <di:waypoint x="430" y="170" />
+        <di:waypoint x="530" y="170" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Cliente_f3" bpmnElement="Cliente_f3">
+        <di:waypoint x="566" y="170" />
+        <di:waypoint x="660" y="170" />
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNShape id="Shape_Participant_Loja" bpmnElement="Participant_Loja" isHorizontal="true">
+        <dc:Bounds x="160" y="320" width="740" height="200" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Loja_Inicio" bpmnElement="Loja_Inicio">
+        <dc:Bounds x="230" y="402" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Loja_Receber" bpmnElement="Loja_Receber">
+        <dc:Bounds x="330" y="380" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Loja_Separar" bpmnElement="Loja_Separar">
+        <dc:Bounds x="490" y="380" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Loja_Confirmar" bpmnElement="Loja_Confirmar">
+        <dc:Bounds x="650" y="380" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Loja_Fim" bpmnElement="Loja_Fim">
+        <dc:Bounds x="810" y="402" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="Edge_Loja_f1" bpmnElement="Loja_f1">
+        <di:waypoint x="266" y="420" />
+        <di:waypoint x="330" y="420" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Loja_f2" bpmnElement="Loja_f2">
+        <di:waypoint x="430" y="420" />
+        <di:waypoint x="490" y="420" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Loja_f3" bpmnElement="Loja_f3">
+        <di:waypoint x="590" y="420" />
+        <di:waypoint x="650" y="420" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Loja_f4" bpmnElement="Loja_f4">
+        <di:waypoint x="750" y="420" />
+        <di:waypoint x="810" y="420" />
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="Edge_MessageFlow_Pedido" bpmnElement="MessageFlow_Pedido">
+        <di:waypoint x="380" y="210" />
+        <di:waypoint x="380" y="380" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_MessageFlow_Confirmacao" bpmnElement="MessageFlow_Confirmacao">
+        <di:waypoint x="700" y="380" />
+        <di:waypoint x="700" y="290" />
+        <di:waypoint x="548" y="290" />
+        <di:waypoint x="548" y="188" />
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

@@ -58,6 +58,35 @@ bpmn-flow run bpmn-files/processo-viagem-compensacao.bpmn \
   --vars '{"pago":false}' --handlers ./handlers.mjs
 ```
 
+## Executando a colaboração
+
+`processo-colaboracao-pedido.bpmn` tem dois pools que rodam ao mesmo tempo. O
+`bpmn-flow run` percebe isso e usa o `CollaborationEngine`:
+
+```bash
+bpmn-flow run bpmn-files/processo-colaboracao-pedido.bpmn
+```
+
+```
+status: waiting
+pool Cliente (Processo_Cliente): waiting
+  path: Cliente_Inicio -> Cliente_Enviar
+pool Loja (Processo_Loja): waiting
+  path: Loja_Inicio -> Loja_Receber
+messages:
+  Pedido: Processo_Cliente -> Processo_Loja (Loja_Receber)
+pending:
+  Processo_Cliente: [t2] Confirmação recebida (catchEvent)
+  Processo_Loja: [t2] Separar itens (userTask)
+```
+
+O pedido já atravessou o message flow; concluir "Separar itens" faz a loja
+confirmar e o cliente receber a confirmação, fechando os dois pools.
+
+No playground, que executa um pool por vez, este arquivo carrega o processo do
+**Cliente** (o primeiro executável) — o pool da Loja aparece no desenho mas não
+recebe token.
+
 ## Diagramas sem layout
 
 `processo-gestao-projeto.bpmn` não tem interchange de diagrama (DI). O viewer

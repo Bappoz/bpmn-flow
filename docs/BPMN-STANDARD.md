@@ -177,6 +177,41 @@ vírgula, de modo que `gerentes, diretoria` são dois papéis.
 O motor não faz controle de acesso: ele expõe a atribuição em `tasks()` e cabe à
 aplicação decidir quem pode concluir a tarefa.
 
+## Colaboração: pools, participantes e message flows
+
+`collaboration`, `participant` e `messageFlow` são lidos para o modelo
+(`BpmnModel.participants`, `BpmnModel.messageFlows`) e executados pelo
+`CollaborationEngine`, que monta **um `WorkflowEngine` por pool executável** e
+roteia cada `messageFlow` do nó de origem para o nó de destino, ponto a ponto —
+diferente de `signal()`, que é broadcast por nome, como a especificação define
+para sinal.
+
+| Elemento                                 | Comportamento                                                                   |
+| ---------------------------------------- | ------------------------------------------------------------------------------- |
+| `participant` com `processRef`           | Vira um pool executado, se o processo tiver `isExecutable="true"`.              |
+| `participant` sem processo (caixa-preta) | Não roda. Nenhum `messageFlow` que toca nele é roteado.                         |
+| `messageFlow`                            | Entrega do `sourceRef` para o `targetRef` quando a origem conclui.              |
+| Mensagem sem receptor assinado           | Fica **em trânsito** (`snapshot().inflight`) até o destino assinar.             |
+| Origem que conclui N vezes               | Entrega N vezes: a contagem vem do histórico, então um laço não perde mensagem. |
+
+O `WorkflowEngine` sozinho continua executando **um** processo; um diagrama de
+colaboração com mais de um pool executável recebe um `warning` do `validate()`
+dizendo exatamente isso. `bpmn-flow run` escolhe o motor certo pelo arquivo.
+
+Divergências:
+
+- Cada pool é uma execução com estado próprio. `CollaborationEngine` é uma
+  fachada sobre elas — os ids de token não são globais, por isso `tasks()`
+  devolve também um `taskId` no formato `<processId>:<tokenId>`.
+- O `messageFlow` não carrega dados por conta própria (a especificação separa a
+  mensagem do mapeamento de dados). O host define o payload em
+  `options.messagePayload`.
+- O servidor HTTP ainda trabalha com um pool por sessão.
+- `correlationSubscription`/`correlationPropertyBinding` (a correlação padrão da
+  spec) não são lidos; a chave de correlação vem de `extensionElements`.
+
+Exemplo executável: `bpmn-files/processo-colaboracao-pedido.bpmn`.
+
 ## Dados e escopo de variáveis
 
 O processo, cada subprocesso e cada instância de multi-instância formam uma
