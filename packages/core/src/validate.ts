@@ -2,7 +2,7 @@ import { BpmnParseError } from './errors.js';
 import { isSafeExpression } from './engine/expression.js';
 import { isActivityKind } from './model/kinds.js';
 import { parseBpmn } from './parser/parse.js';
-import type { BpmnModel, FlowNode, ProcessModel } from './model/types.js';
+import type { BpmnModel, FlowNode, ProcessModel, UnsupportedElement } from './model/types.js';
 
 export interface ValidationIssue {
   severity: 'error' | 'warning';
@@ -15,6 +15,31 @@ export interface ValidationResult {
   issues: ValidationIssue[];
   model?: BpmnModel;
 }
+
+/**
+ * Elements the parser does not model on purpose, because they carry no
+ * execution semantics: warning about them would be noise. Everything else it
+ * skipped is something the diagram says and the engine will not do.
+ */
+const DECORATIVE = new Set([
+  'textAnnotation',
+  'group',
+  'documentation',
+  'extensionElements',
+  'association',
+  // Declarations consumed by reference from the events that use them.
+  'message',
+  'signal',
+  'error',
+  'escalation',
+  'category',
+  'itemDefinition',
+  'interface',
+  'resource',
+  'dataStore',
+  'collaboration',
+  'process',
+]);
 
 /** Ids a reference may legitimately point at, gathered from the whole file. */
 interface ModelContext {
@@ -175,6 +200,9 @@ export function validateModel(model: BpmnModel): ValidationIssue[] {
   const context: ModelContext = {
     processIds: new Set(model.processes.map((process) => process.id)),
   };
+  checkUnsupported(model.unsupported, issues);
+  checkCollaboration(model, issues);
+
   for (const process of model.processes) {
     if (!process.isExecutable) {
       issues.push({
@@ -185,6 +213,62 @@ export function validateModel(model: BpmnModel): ValidationIssue[] {
     validateProcess(process, issues, context);
   }
   return issues;
+}
+
+/**
+ * Says out loud which parts of the diagram the engine will not act on. A
+ * process that draws an `ioSpecification` and gets nothing from it is the kind
+ * of silence this turns into a contract.
+ */
+function checkUnsupported(unsupported: UnsupportedElement[], issues: ValidationIssue[]): void {
+  const seen = new Set<string>();
+  for (const element of unsupported) {
+    if (DECORATIVE.has(element.type)) continue;
+    const where = element.ownerId ?? element.id;
+    const key = `${element.type}:${where ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    issues.push({
+      severity: 'warning',
+      message: `<${element.type}>${where ? ` on "${where}"` : ''} is not modelled: the engine ignores it.`,
+      ...(where ? { nodeId: where } : {}),
+    });
+  }
+}
+
+/**
+ * What a collaboration promises and what a single execution delivers: message
+ * flows that end outside an executable pool go nowhere, and more than one
+ * runnable pool needs the engine that drives all of them.
+ */
+function checkCollaboration(model: BpmnModel, issues: ValidationIssue[]): void {
+  const executable = model.processes.filter((process) => process.isExecutable);
+  if (executable.length > 1) {
+    issues.push({
+      severity: 'warning',
+      message: `Collaboration has ${executable.length} executable pools; WorkflowEngine runs one process — use CollaborationEngine to run them all.`,
+    });
+  }
+
+  const nodesOfExecutablePools = new Set<string>();
+  for (const process of executable) collectNodeIds(process, nodesOfExecutablePools);
+
+  for (const flow of model.messageFlows) {
+    const ends = [flow.sourceRef, flow.targetRef];
+    if (ends.every((end) => end !== undefined && nodesOfExecutablePools.has(end))) continue;
+    issues.push({
+      severity: 'warning',
+      message: `Message flow "${flow.name ?? flow.id}" is not routed: one of its ends is not a node of an executable pool.`,
+      nodeId: flow.id,
+    });
+  }
+}
+
+function collectNodeIds(process: ProcessModel, into: Set<string>): void {
+  for (const node of process.flowNodes) {
+    into.add(node.id);
+    if (node.process) collectNodeIds(node.process, into);
+  }
 }
 
 /**

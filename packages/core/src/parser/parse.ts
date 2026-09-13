@@ -21,6 +21,7 @@ import type {
   Participant,
   ProcessModel,
   SequenceFlow,
+  UnsupportedElement,
 } from '../model/types.js';
 import type {
   MdDataAssociation,
@@ -229,6 +230,28 @@ interface ScopeAccumulator {
   nodes: FlowNode[];
   flows: SequenceFlow[];
   dataElements: DataElement[];
+  /** Everything in the scope the parser saw and does not model. */
+  unsupported: UnsupportedElement[];
+}
+
+/** `bpmn:IoSpecification` -> `ioSpecification`. */
+function localName($type: string): string {
+  const local = $type.replace(/^[^:]+:/, '');
+  return local.charAt(0).toLowerCase() + local.slice(1);
+}
+
+/** Records what an element declares but the parser does not read. */
+function noteUnmodelled(el: MdElement, into: UnsupportedElement[]): void {
+  if (el.ioSpecification) {
+    into.push({ type: 'ioSpecification', ...(el.id ? { ownerId: el.id } : {}) });
+  }
+  for (const subscription of el.correlationSubscriptions ?? []) {
+    into.push({
+      type: 'correlationSubscription',
+      ...(subscription.id ? { id: subscription.id } : {}),
+      ...(el.id ? { ownerId: el.id } : {}),
+    });
+  }
 }
 
 /** Recursively walks a process/subprocess scope into normalized model arrays. */
@@ -236,12 +259,14 @@ function readScope(elements: MdElement[]): ScopeAccumulator {
   const nodes = new Map<string, FlowNode>();
   const flows: SequenceFlow[] = [];
   const dataElements: DataElement[] = [];
+  const unsupported: UnsupportedElement[] = [];
 
   // First pass: flow nodes (so we can wire flows onto them afterwards).
   for (const el of elements) {
     const kind = toElementKind(el.$type);
     if (!kind || !el.id) continue;
 
+    noteUnmodelled(el, unsupported);
     const node: FlowNode = { id: el.id, kind, incoming: [], outgoing: [] };
     if (el.name) node.name = el.name;
     if (isEventKind(kind)) {
@@ -280,6 +305,7 @@ function readScope(elements: MdElement[]): ScopeAccumulator {
     if (el.isForCompensation) node.isForCompensation = true;
     if (el.flowElements && el.flowElements.length > 0) {
       const inner = readScope(el.flowElements);
+      unsupported.push(...inner.unsupported);
       const associations = readAssociations(el.artifacts);
       node.process = {
         id: el.id,
@@ -303,7 +329,11 @@ function readScope(elements: MdElement[]): ScopeAccumulator {
       if (data) dataElements.push(data);
       continue;
     }
-    if (el.$type.endsWith(':SequenceFlow') && el.id && el.sourceRef?.id && el.targetRef?.id) {
+    if (!el.$type.endsWith(':SequenceFlow')) {
+      unsupported.push({ type: localName(el.$type), ...(el.id ? { id: el.id } : {}) });
+      continue;
+    }
+    if (el.id && el.sourceRef?.id && el.targetRef?.id) {
       const flow: SequenceFlow = {
         id: el.id,
         sourceRef: el.sourceRef.id,
@@ -325,11 +355,13 @@ function readScope(elements: MdElement[]): ScopeAccumulator {
     }
   }
 
-  return { nodes: [...nodes.values()], flows, dataElements };
+  return { nodes: [...nodes.values()], flows, dataElements, unsupported };
 }
 
-function readProcess(el: MdElement): ProcessModel {
+function readProcess(el: MdElement, unsupported: UnsupportedElement[]): ProcessModel {
   const scope = readScope(el.flowElements ?? []);
+  noteUnmodelled(el, unsupported);
+  unsupported.push(...scope.unsupported);
 
   const lanes = new Map<string, string>();
   for (const laneSet of el.laneSets ?? []) readLaneAssignments(laneSet.lanes, lanes);
@@ -379,10 +411,11 @@ export async function parseBpmn(xml: string): Promise<BpmnModel> {
   const participants: Participant[] = [];
   const messageFlows: MessageFlow[] = [];
   const dataStores: DataElement[] = [];
+  const unsupported: UnsupportedElement[] = [];
 
   for (const root of roots) {
     if (root.$type.endsWith(':Process')) {
-      processes.push(readProcess(root));
+      processes.push(readProcess(root, unsupported));
     } else if (root.$type.endsWith(':DataStore')) {
       const store = readDataElement(root, 'dataStore');
       if (store) dataStores.push(store);
@@ -400,6 +433,8 @@ export async function parseBpmn(xml: string): Promise<BpmnModel> {
         if (mf.targetRef?.id) messageFlow.targetRef = mf.targetRef.id;
         messageFlows.push(messageFlow);
       }
+    } else {
+      unsupported.push({ type: localName(root.$type), ...(root.id ? { id: root.id } : {}) });
     }
   }
 
@@ -413,6 +448,7 @@ export async function parseBpmn(xml: string): Promise<BpmnModel> {
     participants,
     messageFlows,
     dataStores,
+    unsupported,
   };
   if (definitions.name) model.name = definitions.name;
   return model;

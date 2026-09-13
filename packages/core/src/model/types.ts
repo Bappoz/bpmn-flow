@@ -219,6 +219,19 @@ export interface ProcessModel {
   dataElements?: DataElement[];
 }
 
+/**
+ * A BPMN element the parser saw and did not model, so the engine will not act
+ * on it. Recorded rather than dropped, so `validate()` can say out loud which
+ * parts of the diagram will not run.
+ */
+export interface UnsupportedElement {
+  /** Local XML name, e.g. `ioSpecification`. */
+  type: string;
+  id?: string;
+  /** Element that declares it, when it hangs off a node or a process. */
+  ownerId?: string;
+}
+
 /** Root of a parsed BPMN file: one or more processes plus collaboration info. */
 export interface BpmnModel {
   id: string;
@@ -228,4 +241,6 @@ export interface BpmnModel {
   messageFlows: MessageFlow[];
   /** `bpmn:dataStore` elements, which the spec declares outside any process. */
   dataStores: DataElement[];
+  /** Elements present in the XML that the parser does not model. */
+  unsupported: UnsupportedElement[];
 }

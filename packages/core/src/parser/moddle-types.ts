@@ -128,6 +128,11 @@ export interface MdElement {
   dataInputAssociations?: MdDataAssociation[];
   dataOutputAssociations?: MdDataAssociation[];
 
+  /** Formal data inputs/outputs of an activity or process. */
+  ioSpecification?: MdRef;
+  /** Standard message correlation declared by the process. */
+  correlationSubscriptions?: MdRef[];
+
   // process: swimlanes
   laneSets?: { lanes?: MdLane[] }[];
   /** Artifacts of a process/subprocess: associations, text annotations. */
