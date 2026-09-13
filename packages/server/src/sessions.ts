@@ -99,7 +99,22 @@ export interface SessionStoreOptions {
    * `javascript` only when every XML this store executes is authored by you.
    */
   expressions?: ExpressionMode;
+  /**
+   * How many engines to keep in memory. The least recently used ones are
+   * dropped past this point and rebuilt from storage on the next request, so a
+   * long-running server does not grow with every execution it ever saw.
+   *
+   * Only applies with a {@link SessionStorage}: without one, memory is the
+   * only copy of an execution and nothing is ever evicted. Defaults to 100.
+   */
+  maxCachedSessions?: number;
 }
+
+const DEFAULT_MAX_CACHED_SESSIONS = 100;
+
+/** An execution that will not move again on its own. */
+const isFinished = (status: ExecutionStatus): boolean =>
+  status === 'completed' || status === 'terminated' || status === 'failed';
 
 /**
  * Registry of running executions. Each session owns a {@link WorkflowEngine}
@@ -113,6 +128,11 @@ export interface SessionStoreOptions {
  * Every operation that touches an engine is queued per session, so concurrent
  * requests on the same execution run one after the other instead of sharing
  * the engine's ready queue. Different sessions never wait on each other.
+ *
+ * The cache is bounded ({@link SessionStoreOptions.maxCachedSessions}) and a
+ * finished execution is dropped as soon as it is written through, so the
+ * memory a long-running server holds tracks the work in flight, not every
+ * execution it has ever seen.
  */
 export class SessionStore {
   private readonly cache = new Map<string, LiveSession>();
@@ -125,6 +145,7 @@ export class SessionStore {
    */
   private readonly index = new Map<string, IndexEntry>();
   private indexed: Promise<void> | undefined;
+  private readonly maxCachedSessions: number;
   private readonly storage: SessionStorage | undefined;
   private readonly handlers: Record<string, TaskHandler>;
   private readonly expressions: ExpressionMode;
@@ -133,6 +154,34 @@ export class SessionStore {
     this.storage = options.storage;
     this.handlers = options.handlers ?? {};
     this.expressions = options.expressions ?? 'safe';
+    this.maxCachedSessions = options.maxCachedSessions ?? DEFAULT_MAX_CACHED_SESSIONS;
+  }
+
+  /** Engines currently held in memory. For metrics and for tests. */
+  cachedSessions(): number {
+    return this.cache.size;
+  }
+
+  /**
+   * Keeps the cache bounded, oldest use first. Only ever drops what storage
+   * can rebuild, and never a session with work queued on it.
+   */
+  private evict(): void {
+    if (!this.storage) return;
+    for (const [id, session] of this.cache) {
+      if (this.cache.size <= this.maxCachedSessions) return;
+      if (this.queues.has(id)) continue;
+      // Insertion order is use order: `touch` re-inserts on every access.
+      if (session) this.cache.delete(id);
+    }
+  }
+
+  /** Marks a session as the most recently used one. */
+  private touch(id: string): void {
+    const session = this.cache.get(id);
+    if (!session) return;
+    this.cache.delete(id);
+    this.cache.set(id, session);
   }
 
   /**
@@ -195,6 +244,7 @@ export class SessionStore {
     const session: LiveSession = { id: randomUUID(), xml: input.xml, snapshot, engine };
     this.cache.set(session.id, session);
     await this.persist(session);
+    this.evict();
     return view(session);
   }
 
@@ -383,7 +433,10 @@ export class SessionStore {
 
   private async load(id: string): Promise<LiveSession | undefined> {
     const cached = this.cache.get(id);
-    if (cached) return cached;
+    if (cached) {
+      this.touch(id);
+      return cached;
+    }
     const record = await this.storage?.read(id);
     if (!record) return undefined;
     const { process, processes } = await readProcesses(record.xml);
@@ -401,6 +454,7 @@ export class SessionStore {
     };
     this.cache.set(id, session);
     this.index.set(id, indexFromState(record.state, record.updatedAt));
+    this.evict();
     return session;
   }
 
@@ -418,7 +472,10 @@ export class SessionStore {
     const updatedAt = new Date().toISOString();
     const state = session.engine.getState();
     this.index.set(session.id, indexFromState(state, updatedAt));
-    await this.storage?.write({ id: session.id, xml: session.xml, state, updatedAt });
+    if (!this.storage) return;
+    await this.storage.write({ id: session.id, xml: session.xml, state, updatedAt });
+    // Nothing will move it again, and storage has it: no reason to hold it.
+    if (isFinished(state.status)) this.cache.delete(session.id);
   }
 }
 
