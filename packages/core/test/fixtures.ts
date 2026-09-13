@@ -936,3 +936,34 @@ export const DATA_MAPPING = `<?xml version="1.0" encoding="UTF-8"?>
     <bpmn:sequenceFlow id="f1" sourceRef="Chamar" targetRef="End" />
   </bpmn:process>
 </bpmn:definitions>`;
+
+/**
+ * Collaboration whose first pool is a black box (`isExecutable="false"`), as
+ * BPMN tools routinely emit when the counterpart is an external party.
+ */
+export const COLLABORATION_BLACKBOX_FIRST = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions ${NS} id="Defs">
+  <bpmn:collaboration id="Collab">
+    <bpmn:participant id="PartBlack" name="BlackBox" processRef="BlackBox" />
+    <bpmn:participant id="PartMain" name="Loja" processRef="Main" />
+  </bpmn:collaboration>
+  <bpmn:process id="BlackBox" isExecutable="false" />
+  <bpmn:process id="Main" isExecutable="true">
+    <bpmn:startEvent id="Start" />
+    <bpmn:task id="Work" name="Trabalho" />
+    <bpmn:endEvent id="End" />
+    <bpmn:sequenceFlow id="f1" sourceRef="Start" targetRef="Work" />
+    <bpmn:sequenceFlow id="f2" sourceRef="Work" targetRef="End" />
+  </bpmn:process>
+</bpmn:definitions>`;
+
+/** Every pool is a black box: nothing in the file can be executed. */
+export const COLLABORATION_ALL_BLACKBOX = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions ${NS} id="Defs">
+  <bpmn:collaboration id="Collab">
+    <bpmn:participant id="PartA" name="Cliente" processRef="A" />
+  </bpmn:collaboration>
+  <bpmn:process id="A" name="Cliente" isExecutable="false">
+    <bpmn:startEvent id="Start" />
+  </bpmn:process>
+</bpmn:definitions>`;

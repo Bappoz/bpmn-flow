@@ -1,4 +1,5 @@
 import {
+  executableProcess,
   parseBpmn,
   validateBpmn,
   WorkflowEngine,
@@ -105,8 +106,7 @@ export async function inspect(xml: string): Promise<CommandResult> {
 /** `bpmn-flow run <file>` — executes and reports where it stopped. */
 export async function run(xml: string, options: RunOptions = {}): Promise<RunResult> {
   const model = await parseBpmn(xml);
-  const process = model.processes[0];
-  if (!process) throw new Error('No executable process found in the diagram.');
+  const process = executableProcess(model);
 
   const engine = options.state
     ? WorkflowEngine.restore(process, options.state, {

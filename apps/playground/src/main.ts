@@ -1,6 +1,7 @@
 import {
   decisionsAfter,
   evaluateCondition,
+  findExecutableProcess,
   parseBpmn,
   processVariables,
   suggestVariables,
@@ -12,6 +13,7 @@ import {
   type ExecutionSnapshot,
   type FlowNode,
   type GatewayDecision,
+  type ProcessModel,
   type HistoryEntry,
   type PendingTask,
   type TokenSnapshot,
@@ -177,7 +179,17 @@ async function loadDiagram(xml: string): Promise<void> {
   els.actions.replaceChildren();
   els.variablesView.textContent = '';
   els.timers.replaceChildren();
-  els.status.textContent = `Diagrama carregado: ${currentModel.processes[0]?.name ?? currentModel.processes[0]?.id ?? 'processo'}.`;
+  const loaded = mainProcess();
+  els.status.textContent = `Diagrama carregado: ${loaded?.name ?? loaded?.id ?? 'processo'}.`;
+}
+
+/**
+ * O processo que o playground executa e descreve. Uma colaboracao costuma
+ * declarar pools black-box antes do pool que roda de fato, entao o primeiro
+ * processo do arquivo nao serve.
+ */
+function mainProcess(): ProcessModel | undefined {
+  return currentModel ? findExecutableProcess(currentModel) : undefined;
 }
 
 function teardownEngine(): void {
@@ -192,8 +204,8 @@ function readVariables(): Record<string, unknown> {
 }
 
 function newEngine(mode: EngineMode, variables: Record<string, unknown>): WorkflowEngine {
-  const process = currentModel?.processes[0];
-  if (!process) throw new Error('Nenhum processo executável.');
+  const process = mainProcess();
+  if (!process) throw new Error('Nenhum processo executável no diagrama.');
   const created = new WorkflowEngine(process, { mode, variables, decide: onGatewayDecision });
   unbindViewer = viewer.bindEngine(created);
   created.on('node.enter', (e) => log(`Entrou: ${label(e.nodeId)}`));
@@ -279,7 +291,7 @@ function addTaskCard(task: PendingTask): void {
 function addEventGatewayButtons(token: TokenSnapshot): void {
   const node = nodesById.get(token.nodeId);
   for (const flowId of node?.outgoing ?? []) {
-    const flow = currentModel?.processes[0]?.sequenceFlows.find((f) => f.id === flowId);
+    const flow = mainProcess()?.sequenceFlows.find((f) => f.id === flowId);
     if (flow) actionButton(`Sinalizar ${label(flow.targetRef)}`, () => signal(flow.targetRef));
   }
 }
@@ -298,7 +310,7 @@ function actionButton(text: string, onClick: () => void): void {
  */
 function renderVariableHints(): void {
   els.variableHints.replaceChildren();
-  const process = currentModel?.processes[0];
+  const process = mainProcess();
   if (!process) return;
 
   const usages = processVariables(process);
@@ -562,7 +574,7 @@ function timerOf(node: FlowNode | undefined): string | undefined {
 
 /** Gateway baseado em evento: a escolha é qual gatilho chega primeiro. */
 function gatewayStep(active: WorkflowEngine, token: TokenSnapshot): Step {
-  const flows = currentModel?.processes[0]?.sequenceFlows ?? [];
+  const flows = mainProcess()?.sequenceFlows ?? [];
   const choices: PromptChoice[] = [];
   for (const flowId of nodesById.get(token.nodeId)?.outgoing ?? []) {
     const flow = flows.find((candidate) => candidate.id === flowId);
@@ -644,7 +656,7 @@ function decisionPrompt(
   decided: string[];
   selected?: string;
 } {
-  const process = currentModel?.processes[0];
+  const process = mainProcess();
   const decisions = process ? decisionsAfter(process, nodeId) : [];
   const choices: PromptChoice[] = [];
   const fields: PromptField[] = [];

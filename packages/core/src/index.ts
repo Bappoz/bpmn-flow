@@ -1,6 +1,7 @@
 export * from './model/kinds.js';
 export * from './model/types.js';
 export { ProcessGraph } from './model/graph.js';
+export { executableProcess, findExecutableProcess } from './model/executable.js';
 export { processVariables, suggestVariables } from './model/variables.js';
 export type { VariableUsage } from './model/variables.js';
 export { decisionsAfter } from './model/decisions.js';

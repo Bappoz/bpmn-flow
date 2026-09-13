@@ -33,6 +33,24 @@ const BROKEN = `<?xml version="1.0" encoding="UTF-8"?>
   </bpmn:process>
 </bpmn:definitions>`;
 
+/** First pool is a black box, as BPMN tools emit for an external party. */
+const COLLAB = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  targetNamespace="http://bpmn-flow.test" id="Defs">
+  <bpmn:collaboration id="Collab">
+    <bpmn:participant id="PartBlack" name="BlackBox" processRef="BlackBox" />
+    <bpmn:participant id="PartMain" name="Loja" processRef="Main" />
+  </bpmn:collaboration>
+  <bpmn:process id="BlackBox" isExecutable="false" />
+  <bpmn:process id="Main" isExecutable="true">
+    <bpmn:startEvent id="Start" />
+    <bpmn:task id="Work" />
+    <bpmn:endEvent id="End" />
+    <bpmn:sequenceFlow id="f0" sourceRef="Start" targetRef="Work" />
+    <bpmn:sequenceFlow id="f1" sourceRef="Work" targetRef="End" />
+  </bpmn:process>
+</bpmn:definitions>`;
+
 describe('validate', () => {
   it('accepts a well-formed diagram', async () => {
     const result = await validate(ORDER);
@@ -209,5 +227,13 @@ describe('run with automation', () => {
     expect(result.output).toContain('incidents:');
     expect(result.output).toContain('502 bad gateway');
     expect(result.exitCode).toBe(0);
+  });
+});
+
+describe('run on a collaboration', () => {
+  it('runs the executable pool even when a black box comes first', async () => {
+    const result = await run(COLLAB);
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toContain('completed');
   });
 });

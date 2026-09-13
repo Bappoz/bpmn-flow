@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  executableProcess,
   parseBpmn,
   WorkflowEngine,
   type EngineMode,
@@ -296,9 +297,7 @@ async function readProcesses(
   xml: string,
 ): Promise<{ process: ProcessModel; processes: ProcessModel[] }> {
   const model = await parseBpmn(xml);
-  const process = model.processes[0];
-  if (!process) throw new Error('No executable process found.');
-  return { process, processes: model.processes };
+  return { process: executableProcess(model), processes: model.processes };
 }
 
 function view(session: LiveSession): Session {
