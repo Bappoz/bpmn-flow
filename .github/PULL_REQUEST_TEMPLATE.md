@@ -20,3 +20,4 @@ Closes #
 - [ ] `docs/BPMN-STANDARD.md` atualizado, se mudou semântica BPMN
 - [ ] `ENGINE_STATE_VERSION` bumpado, se mudou a forma de `EngineState`
 - [ ] README/docs atualizados, se a funcionalidade pública mudou
+- [ ] `npx changeset` rodado, se a mudança é visível para quem consome os pacotes

@@ -610,13 +610,14 @@ executa isso no Node 20 e 22.
 
 ### Publicando
 
-Os quatro pacotes publicáveis já declaram `publishConfig`, `repository` e
-`files`:
+Versionamento e publicação são feitos por [changesets](https://github.com/changesets/changesets):
+uma mudança visível entra com `npx changeset` no mesmo PR, e o workflow de
+release abre o PR de versão e publica quando ele é mergeado. O processo inteiro
+está em [`CHANGELOG.md`](CHANGELOG.md).
 
 ```bash
-npm run build
+npx changeset           # descreve a mudança
 npm run release:dry     # confere o conteúdo do tarball de cada pacote
-npm publish --workspaces --access public
 ```
 
 ## Estrutura do repositório

@@ -48,6 +48,18 @@ npm run coverage     # com relatório e os limiares que o CI cobra
    `Closes #N` fecha a issue.
 5. Abra o PR com o template preenchido.
 
+## Changeset
+
+Mudança visível para quem consome os pacotes entra com um changeset no mesmo PR:
+
+```bash
+npx changeset
+```
+
+Antes de 1.0, `minor` é o bump de quebra de compatibilidade. PR que só toca CI,
+teste ou documentação interna não precisa. Detalhes em
+[`CHANGELOG.md`](CHANGELOG.md).
+
 ## Bug e teste
 
 Correção de bug entra com o **teste que falha antes dela**. Se a suíte atual não

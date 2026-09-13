@@ -1,0 +1,12 @@
+{
+  "$schema": "https://unpkg.com/@changesets/config@3.1.1/schema.json",
+  "changelog": ["@changesets/cli/changelog", null],
+  "commit": false,
+  "access": "public",
+  "baseBranch": "master",
+  "updateInternalDependencies": "patch",
+  "// fixed": "The four packages are one product: server and cli depend on the engine's exact behaviour, so they carry one version.",
+  "fixed": [["@bpmn-flow/core", "@bpmn-flow/viewer", "@bpmn-flow/server", "@bpmn-flow/cli"]],
+  "// ignore": "The playground is private and never published.",
+  "ignore": ["@bpmn-flow/playground"]
+}
