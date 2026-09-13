@@ -5,6 +5,7 @@ import {
   WorkflowEngine,
   type EngineMode,
   type EngineOptions,
+  type EngineState,
   type ExpressionMode,
   type ExecutionSnapshot,
   type ExecutionStatus,
@@ -55,6 +56,33 @@ interface LiveSession extends Session {
   engine: WorkflowEngine;
 }
 
+/**
+ * What the store needs to know about a session without rebuilding its engine:
+ * whether somebody is waiting on it and when it next moves on its own.
+ */
+interface IndexEntry {
+  status: ExecutionStatus;
+  /** Tokens parked on a wait state. */
+  waiting: number;
+  /** Earliest timer or scheduled retry, when the session has one. */
+  dueAt?: number;
+  updatedAt?: string;
+}
+
+/** Reads the index entry out of a stored state, without an engine. */
+function indexFromState(state: EngineState, updatedAt?: string): IndexEntry {
+  const retries = (state.incidents ?? [])
+    .map((incident) => incident.retryAt)
+    .filter((at): at is number => at !== undefined);
+  const due = [...state.timers.map((timer) => timer.dueAt), ...retries];
+  return {
+    status: state.status,
+    waiting: state.tokens.filter((token) => token.waiting !== undefined).length,
+    ...(due.length > 0 ? { dueAt: Math.min(...due) } : {}),
+    ...(updatedAt ? { updatedAt } : {}),
+  };
+}
+
 export interface SessionStoreOptions {
   /** Where sessions are persisted. In-memory only when omitted. */
   storage?: SessionStorage;
@@ -90,6 +118,13 @@ export class SessionStore {
   private readonly cache = new Map<string, LiveSession>();
   /** Tail of the pending work queued for each session, by session id. */
   private readonly queues = new Map<string, Promise<void>>();
+  /**
+   * Status, wait count and next due date of every known session. Kept in
+   * memory so the periodic tick is a scan of this map instead of a full read
+   * of the session directory, which was O(N) of disk I/O per second.
+   */
+  private readonly index = new Map<string, IndexEntry>();
+  private indexed: Promise<void> | undefined;
   private readonly storage: SessionStorage | undefined;
   private readonly handlers: Record<string, TaskHandler>;
   private readonly expressions: ExpressionMode;
@@ -121,6 +156,19 @@ export class SessionStore {
       if (this.queues.get(id) === tail) this.queues.delete(id);
     });
     return run;
+  }
+
+  /**
+   * Builds the index once, from whatever the storage already holds. A restart
+   * pays one full scan; everything after that is served from memory.
+   */
+  private ensureIndex(): Promise<void> {
+    this.indexed ??= (async () => {
+      for (const record of (await this.storage?.list()) ?? []) {
+        this.index.set(record.id, indexFromState(record.state, record.updatedAt));
+      }
+    })();
+    return this.indexed;
   }
 
   /** Applies the store's automation to a freshly built engine. */
@@ -240,19 +288,27 @@ export class SessionStore {
    * a timer actually due are rebuilt.
    */
   async tickAll(now: number = Date.now()): Promise<string[]> {
-    const candidates = new Set<string>();
-    for (const record of (await this.storage?.list()) ?? []) {
-      if (record.state.timers.some((timer) => timer.dueAt <= now)) candidates.add(record.id);
-    }
-    for (const [id, session] of this.cache) {
-      if (session.engine.dueTimers().some((timer) => timer.dueAt <= now)) candidates.add(id);
-    }
+    await this.ensureIndex();
+    const candidates = [...this.index]
+      .filter(([, entry]) => entry.dueAt !== undefined && entry.dueAt <= now)
+      .map(([id]) => id);
     const advanced: string[] = [];
     for (const id of candidates) {
       await this.tick(id, now);
       advanced.push(id);
     }
     return advanced;
+  }
+
+  /**
+   * When the earliest timer or scheduled retry of any session falls due, so a
+   * host can sleep until then instead of polling.
+   */
+  nextDueAt(): number | undefined {
+    const due = [...this.index.values()]
+      .map((entry) => entry.dueAt)
+      .filter((at): at is number => at !== undefined);
+    return due.length > 0 ? Math.min(...due) : undefined;
   }
 
   /**
@@ -285,12 +341,10 @@ export class SessionStore {
 
   /** Ids of the sessions that have a token parked on something. */
   private async waitingIds(): Promise<Set<string>> {
+    await this.ensureIndex();
     const ids = new Set<string>();
-    for (const record of (await this.storage?.list()) ?? []) {
-      if (record.state.tokens.some((token) => token.waiting !== undefined)) ids.add(record.id);
-    }
-    for (const [id, session] of this.cache) {
-      if (session.snapshot.tokens.some((token) => token.waiting)) ids.add(id);
+    for (const [id, entry] of this.index) {
+      if (entry.waiting > 0) ids.add(id);
     }
     return ids;
   }
@@ -307,6 +361,7 @@ export class SessionStore {
   async delete(id: string): Promise<boolean> {
     return this.queued(id, async () => {
       const removedFromCache = this.cache.delete(id);
+      this.index.delete(id);
       const removedFromStorage = (await this.storage?.remove(id)) ?? false;
       return removedFromCache || removedFromStorage;
     });
@@ -317,24 +372,13 @@ export class SessionStore {
    * state directly instead of rebuilding engines, so listing stays cheap.
    */
   async list(): Promise<SessionSummary[]> {
-    const summaries = new Map<string, SessionSummary>();
-    for (const record of (await this.storage?.list()) ?? []) {
-      summaries.set(record.id, {
-        id: record.id,
-        status: record.state.status,
-        waiting: record.state.tokens.filter((token) => token.waiting !== undefined).length,
-        updatedAt: record.updatedAt,
-      });
-    }
-    // The cache is authoritative: it holds the live engines.
-    for (const session of this.cache.values()) {
-      summaries.set(session.id, {
-        id: session.id,
-        status: session.snapshot.status,
-        waiting: session.snapshot.tokens.filter((token) => token.waiting).length,
-      });
-    }
-    return [...summaries.values()];
+    await this.ensureIndex();
+    return [...this.index].map(([id, entry]) => ({
+      id,
+      status: entry.status,
+      waiting: entry.waiting,
+      ...(entry.updatedAt ? { updatedAt: entry.updatedAt } : {}),
+    }));
   }
 
   private async load(id: string): Promise<LiveSession | undefined> {
@@ -356,6 +400,7 @@ export class SessionStore {
       engine,
     };
     this.cache.set(id, session);
+    this.index.set(id, indexFromState(record.state, record.updatedAt));
     return session;
   }
 
@@ -365,13 +410,15 @@ export class SessionStore {
     return session;
   }
 
+  /**
+   * Writes the session through to storage, if any, and refreshes its index
+   * entry — which is what keeps the periodic tick off the disk.
+   */
   private async persist(session: LiveSession): Promise<void> {
-    await this.storage?.write({
-      id: session.id,
-      xml: session.xml,
-      state: session.engine.getState(),
-      updatedAt: new Date().toISOString(),
-    });
+    const updatedAt = new Date().toISOString();
+    const state = session.engine.getState();
+    this.index.set(session.id, indexFromState(state, updatedAt));
+    await this.storage?.write({ id: session.id, xml: session.xml, state, updatedAt });
   }
 }
 
