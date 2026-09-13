@@ -10,8 +10,15 @@ export interface MdRef {
   id?: string;
 }
 
+/** Anything a tool put under `bpmn:extensionElements`, attributes included. */
+export interface MdExtensionElements {
+  values?: (MdRef & { correlationKey?: string })[];
+}
+
 export interface MdEventDefinition {
   $type: string;
+  /** Extensions on the event definition itself. */
+  extensionElements?: MdExtensionElements;
   /** Link events carry the name on the definition itself. */
   name?: string;
   /** Conditional events: the expression that makes them fire. */
@@ -21,7 +28,7 @@ export interface MdEventDefinition {
   timeDuration?: { body?: string };
   timeDate?: { body?: string };
   timeCycle?: { body?: string };
-  messageRef?: MdRef & { name?: string };
+  messageRef?: MdRef & { name?: string; extensionElements?: MdExtensionElements };
   signalRef?: MdRef & { name?: string };
   errorRef?: MdRef & { name?: string; errorCode?: string };
   escalationRef?: MdRef & { name?: string; escalationCode?: string };
@@ -108,7 +115,9 @@ export interface MdElement {
   // activities: who is expected to perform the work
   resources?: MdResourceRole[];
   /** Receive/send tasks: the message they wait for or emit. */
-  messageRef?: MdRef & { name?: string };
+  messageRef?: MdRef & { name?: string; extensionElements?: MdExtensionElements };
+  /** Extensions a tool attached to the element. */
+  extensionElements?: MdExtensionElements;
 
   /** Ad-hoc subprocess: when its activities are considered done. */
   completionCondition?: { body?: string };

@@ -26,6 +26,7 @@ import type {
   MdDataAssociation,
   MdElement,
   MdEventDefinition,
+  MdExtensionElements,
   MdLane,
   MdLoopCharacteristics,
   MdResourceRole,
@@ -74,6 +75,33 @@ function toEventDefinitionKind($type: string): EventDefinitionKind {
   const local = $type.replace(/^[^:]+:/, '').replace(/EventDefinition$/, '');
   const camel = local.charAt(0).toLowerCase() + local.slice(1);
   return KIND_ALIASES[camel] ?? (camel as EventDefinitionKind);
+}
+
+/**
+ * Correlation key declared under `extensionElements`, as BPMN tools write it:
+ * `<zeebe:subscription correlationKey="=pedidoId" />`. The leading `=` marks a
+ * FEEL expression in those tools and is not part of the expression itself.
+ */
+function readCorrelationKey(...sources: (MdExtensionElements | undefined)[]): string | undefined {
+  for (const source of sources) {
+    for (const value of source?.values ?? []) {
+      const key = value.correlationKey?.trim();
+      if (key) return key.startsWith('=') ? key.slice(1).trim() : key;
+    }
+  }
+  return undefined;
+}
+
+/** Every `extensionElements` a catch event can hang a correlation key on. */
+function correlationSources(el: MdElement): (MdExtensionElements | undefined)[] {
+  return [
+    el.messageRef?.extensionElements,
+    el.extensionElements,
+    ...(el.eventDefinitions ?? []).flatMap((def) => [
+      def.messageRef?.extensionElements,
+      def.extensionElements,
+    ]),
+  ];
 }
 
 /** One `bpmn:*EventDefinition` turned into a normalized detail. */
@@ -235,6 +263,8 @@ function readScope(elements: MdElement[]): ScopeAccumulator {
     if (candidates.length > 0) node.candidates = candidates;
     const message = el.messageRef?.name ?? el.messageRef?.id;
     if (message) node.messageRef = message;
+    const correlationKey = readCorrelationKey(...correlationSources(el));
+    if (correlationKey) node.correlationKey = correlationKey;
     if (kind === 'adHocSubProcess') {
       if (el.completionCondition?.body) node.completionCondition = el.completionCondition.body;
       if (el.ordering?.toLowerCase() === 'sequential') node.sequential = true;

@@ -1014,3 +1014,50 @@ export const PARALLEL_MULTIPLE_BOUNDARY = `<?xml version="1.0" encoding="UTF-8"?
     <bpmn:sequenceFlow id="fb2" sourceRef="Acelerar" targetRef="EndAlt" />
   </bpmn:process>
 </bpmn:definitions>`;
+
+/**
+ * Two instances of this process wait for the same message name; only the one
+ * whose `pedidoId` matches the delivered key may wake up.
+ */
+export const MESSAGE_CORRELATION = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions ${NS} xmlns:zeebe="http://camunda.org/schema/zeebe/1.0" id="Defs">
+  <bpmn:message id="MsgPago" name="pedido-pago">
+    <bpmn:extensionElements>
+      <zeebe:subscription correlationKey="=pedidoId" />
+    </bpmn:extensionElements>
+  </bpmn:message>
+  <bpmn:process id="P" isExecutable="true">
+    <bpmn:startEvent id="Start" />
+    <bpmn:intermediateCatchEvent id="AguardarPagamento">
+      <bpmn:messageEventDefinition messageRef="MsgPago" />
+    </bpmn:intermediateCatchEvent>
+    <bpmn:task id="Expedir" />
+    <bpmn:endEvent id="End" />
+    <bpmn:sequenceFlow id="f0" sourceRef="Start" targetRef="AguardarPagamento" />
+    <bpmn:sequenceFlow id="f1" sourceRef="AguardarPagamento" targetRef="Expedir" />
+    <bpmn:sequenceFlow id="f2" sourceRef="Expedir" targetRef="End" />
+  </bpmn:process>
+</bpmn:definitions>`;
+
+/** Same message name, no correlation key declared: name is all there is. */
+export const MESSAGE_NO_CORRELATION = MESSAGE_CORRELATION.replace(
+  /<bpmn:extensionElements>[\s\S]*?<\/bpmn:extensionElements>/,
+  '',
+);
+
+/** Correlation key on a receive task instead of a catch event. */
+export const MESSAGE_CORRELATION_RECEIVE_TASK = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions ${NS} xmlns:zeebe="http://camunda.org/schema/zeebe/1.0" id="Defs">
+  <bpmn:message id="MsgPago" name="pedido-pago">
+    <bpmn:extensionElements>
+      <zeebe:subscription correlationKey="=pedidoId" />
+    </bpmn:extensionElements>
+  </bpmn:message>
+  <bpmn:process id="P" isExecutable="true">
+    <bpmn:startEvent id="Start" />
+    <bpmn:receiveTask id="Receber" messageRef="MsgPago" />
+    <bpmn:endEvent id="End" />
+    <bpmn:sequenceFlow id="f0" sourceRef="Start" targetRef="Receber" />
+    <bpmn:sequenceFlow id="f1" sourceRef="Receber" targetRef="End" />
+  </bpmn:process>
+</bpmn:definitions>`;

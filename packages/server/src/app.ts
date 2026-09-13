@@ -141,6 +141,20 @@ export function createApp(options: AppOptions = {}): Hono {
     return c.json(await sessions.signal(c.req.param('id'), requireString(name, 'name'), output));
   });
 
+  /**
+   * Routes a message to whichever execution correlates with it, instead of
+   * asking the caller which session that is.
+   */
+  app.post('/api/messages', async (c) => {
+    const { name, correlationKey, output } = await jsonBody<{
+      name?: unknown;
+      correlationKey?: unknown;
+      output?: Record<string, unknown>;
+    }>(c);
+    const delivered = await sessions.correlate(requireString(name, 'name'), correlationKey, output);
+    return c.json({ delivered }, delivered.length > 0 ? 200 : 404);
+  });
+
   app.delete('/api/sessions/:id', async (c) =>
     c.json({ deleted: await sessions.delete(c.req.param('id')) }),
   );

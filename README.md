@@ -551,8 +551,12 @@ createApp({ expressions: 'javascript' });
   que lança, ou que o avaliador recusa, é tratada como `false`.
 - **`ioSpecification` formal não é interpretado**: o mapeamento de dados é lido
   na forma `assignment/from/to`.
-- **Correlação de mensagem por chave** não existe; a entrega é por nome da
-  mensagem ou id do elemento.
+- **Correlação de mensagem por chave** cobre a forma que as ferramentas BPMN
+  escrevem em `extensionElements` (`correlationKey="=pedidoId"`): `correlate()`
+  entrega só para a instância cuja chave bate, e `POST /api/messages` roteia sem
+  o chamador saber a sessão. O mecanismo padrão da spec
+  (`correlationSubscription`/`correlationPropertyBinding`) não é lido; sem chave
+  declarada a entrega volta a ser por nome.
 - **DMN está fora de escopo**: `businessRuleTask` é o ponto de extensão — ligue
   um handler ao seu motor de decisão.
 

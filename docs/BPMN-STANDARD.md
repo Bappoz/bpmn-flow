@@ -256,8 +256,13 @@ tratada como falsa (fail-closed).
 4. **Mapeamento de dados por `assignment`.** As data associations são lidas na
    forma `assignment/from/to` (expressões); `ioSpecification` com data inputs e
    outputs formais não é interpretado.
-5. **Correlação de mensagem por chave não existe.** A entrega é por nome da
-   mensagem/sinal ou pelo id do elemento.
+5. **Correlação de mensagem por chave.** `signal(name)` continua sendo o
+   broadcast que a spec define para sinal. Para mensagem, `correlate(name, chave)`
+   entrega ponto a ponto: a chave vem de `extensionElements`
+   (`correlationKey="=pedidoId"`, como as ferramentas BPMN escrevem) e é avaliada
+   contra as variáveis da instância. O mecanismo padrão
+   (`correlationSubscription` + `correlationPropertyBinding`) não é lido, e um
+   assinante sem chave declarada aceita a mensagem pelo nome.
 6. **DMN está fora de escopo.** `businessRuleTask` executa o handler que você
    registrar, e é por ali que um motor de decisão entra.
 7. **`options.decide`.** Extensão opcional: quando registrada, o gateway

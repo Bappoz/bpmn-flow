@@ -107,6 +107,16 @@ export interface FlowNode {
 
   /** Receive/send tasks: name of the message they wait for or emit. */
   messageRef?: string;
+  /**
+   * Message events and receive tasks: expression picking the value that
+   * identifies *this* instance among every instance listening for the same
+   * message, read from the message's `extensionElements`
+   * (`correlationKey="=pedidoId"`).
+   *
+   * Without it, a message of that name reaches every subscriber — a broadcast,
+   * not a message.
+   */
+  correlationKey?: string;
 
   /** Ad-hoc subprocess: expression that ends it before every activity ran. */
   completionCondition?: string;

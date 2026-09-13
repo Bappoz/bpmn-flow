@@ -179,13 +179,7 @@ export class SessionStore {
    * already finished are skipped without rebuilding their engine.
    */
   async inbox(filter?: TaskFilter): Promise<InboxTask[]> {
-    const ids = new Set<string>();
-    for (const record of (await this.storage?.list()) ?? []) {
-      if (record.state.tokens.some((token) => token.waiting !== undefined)) ids.add(record.id);
-    }
-    for (const [id, session] of this.cache) {
-      if (session.snapshot.tokens.some((token) => token.waiting)) ids.add(id);
-    }
+    const ids = await this.waitingIds();
 
     const inbox: InboxTask[] = [];
     for (const id of ids) {
@@ -259,6 +253,46 @@ export class SessionStore {
       advanced.push(id);
     }
     return advanced;
+  }
+
+  /**
+   * Routes a message to the executions that correlate with it: the ones with a
+   * subscription of that name whose key resolves to `correlationKey`. Returns
+   * the ids that took it, so a caller can tell "nobody is waiting for this"
+   * from "delivered".
+   *
+   * Unlike {@link signal}, which is addressed at one session, this is how a
+   * "pedido 42 pago" event coming from outside finds its instance.
+   */
+  async correlate(
+    name: string,
+    correlationKey: unknown,
+    output?: Record<string, unknown>,
+  ): Promise<string[]> {
+    const delivered: string[] = [];
+    for (const id of await this.waitingIds()) {
+      const took = await this.queued(id, async () => {
+        const session = await this.load(id);
+        if (!session?.engine.subscribedTo(name, correlationKey)) return false;
+        session.snapshot = await session.engine.correlate(name, correlationKey, output);
+        await this.persist(session);
+        return true;
+      });
+      if (took) delivered.push(id);
+    }
+    return delivered;
+  }
+
+  /** Ids of the sessions that have a token parked on something. */
+  private async waitingIds(): Promise<Set<string>> {
+    const ids = new Set<string>();
+    for (const record of (await this.storage?.list()) ?? []) {
+      if (record.state.tokens.some((token) => token.waiting !== undefined)) ids.add(record.id);
+    }
+    for (const [id, session] of this.cache) {
+      if (session.snapshot.tokens.some((token) => token.waiting)) ids.add(id);
+    }
+    return ids;
   }
 
   async signal(id: string, name: string, output?: Record<string, unknown>): Promise<Session> {
