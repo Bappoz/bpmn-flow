@@ -241,3 +241,44 @@ describe('what the engine ignores', () => {
     expect(result.issues).toHaveLength(0);
   });
 });
+
+const BLACK_BOX_POOL = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" id="d" targetNamespace="t">
+  <bpmn:collaboration id="Collab">
+    <bpmn:participant id="PartCliente" name="Cliente" processRef="Cliente" />
+    <bpmn:participant id="PartLoja" name="Loja" processRef="Loja" />
+  </bpmn:collaboration>
+  <bpmn:process id="Cliente" isExecutable="false" />
+  <bpmn:process id="Loja" name="Loja" isExecutable="true">
+    <bpmn:startEvent id="L1" />
+    <bpmn:task id="Atender" />
+    <bpmn:endEvent id="L2" />
+    <bpmn:sequenceFlow id="l1" sourceRef="L1" targetRef="Atender" />
+    <bpmn:sequenceFlow id="l2" sourceRef="Atender" targetRef="L2" />
+  </bpmn:process>
+</bpmn:definitions>`;
+
+describe('black-box participants', () => {
+  it('does not ask a black box for a start event', async () => {
+    const result = await validateBpmn(BLACK_BOX_POOL);
+    // A pool with no internals is what "black box" means; it is not a defect.
+    expect(result.valid).toBe(true);
+    expect(result.issues.filter((i) => i.severity === 'error')).toHaveLength(0);
+  });
+
+  it('still says the pool will not run', async () => {
+    const result = await validateBpmn(BLACK_BOX_POOL);
+    expect(result.issues).toEqual([
+      {
+        severity: 'warning',
+        message: 'Process "Cliente" is not executable and will not run.',
+      },
+    ]);
+  });
+
+  it('keeps asking an executable process for a start event', async () => {
+    const result = await validateBpmn(NO_START);
+    expect(result.valid).toBe(false);
+    expect(result.issues.some((i) => i.message.includes('no start event'))).toBe(true);
+  });
+});

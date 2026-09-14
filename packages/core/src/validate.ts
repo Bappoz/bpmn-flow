@@ -52,17 +52,20 @@ function validateProcess(
   issues: ValidationIssue[],
   context: ModelContext,
 ): void {
-  const starts = process.flowNodes.filter((n) => n.kind === 'startEvent');
-  const ends = process.flowNodes.filter((n) => n.kind === 'endEvent');
-
-  if (starts.length === 0) {
-    issues.push({ severity: 'error', message: `Process "${process.id}" has no start event.` });
-  }
-  if (ends.length === 0) {
-    issues.push({
-      severity: 'warning',
-      message: `Process "${process.id}" has no end event.`,
-    });
+  // "Where does it start and end" is a question about something that runs. A
+  // black-box participant is drawn precisely to say "I do not model what
+  // happens in here", and has no start event for the same reason it has no
+  // nodes at all — that is the notation working, not a defect.
+  if (process.isExecutable) {
+    if (!process.flowNodes.some((n) => n.kind === 'startEvent')) {
+      issues.push({ severity: 'error', message: `Process "${process.id}" has no start event.` });
+    }
+    if (!process.flowNodes.some((n) => n.kind === 'endEvent')) {
+      issues.push({
+        severity: 'warning',
+        message: `Process "${process.id}" has no end event.`,
+      });
+    }
   }
 
   const nodesById = new Map(process.flowNodes.map((node) => [node.id, node]));
