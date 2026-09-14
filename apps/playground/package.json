@@ -13,7 +13,7 @@
   "dependencies": {
     "@bpmn-flow/core": "^0.1.0",
     "@bpmn-flow/viewer": "^0.1.0",
-    "bpmn-js": "^18.21.0"
+    "bpmn-js": "^18.28.0"
   },
   "devDependencies": {
     "vite": "^8.3.0"
