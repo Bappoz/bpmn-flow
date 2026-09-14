@@ -272,6 +272,28 @@ export const EXCLUSIVE_NO_DEFAULT = wrap(`
     <bpmn:sequenceFlow id="fh2" sourceRef="High" targetRef="EndHigh" />
     <bpmn:sequenceFlow id="fl2" sourceRef="Low" targetRef="EndLow" />`);
 
+/**
+ * A gateway whose guard only the `javascript` mode understands: the safe
+ * evaluator refuses an arrow function, so under `safe` the condition reads as
+ * `undefined` and the token leaves through the default flow. The user task in
+ * front of it is what lets a test park, persist and restore before the gateway
+ * decides.
+ */
+export const JS_CONDITION_AFTER_WAIT = wrap(`
+    <bpmn:startEvent id="Start" />
+    <bpmn:userTask id="Review" name="Review basket" />
+    <bpmn:exclusiveGateway id="Gw" default="fNone" />
+    <bpmn:task id="Big" />
+    <bpmn:task id="None" />
+    <bpmn:endEvent id="EndBig" />
+    <bpmn:endEvent id="EndNone" />
+    <bpmn:sequenceFlow id="f0" sourceRef="Start" targetRef="Review" />
+    <bpmn:sequenceFlow id="f1" sourceRef="Review" targetRef="Gw" />
+    <bpmn:sequenceFlow id="fBig" sourceRef="Gw" targetRef="Big">${cond('itens.some((i) =&gt; i &gt; 2)')}</bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="fNone" sourceRef="Gw" targetRef="None" />
+    <bpmn:sequenceFlow id="fb2" sourceRef="Big" targetRef="EndBig" />
+    <bpmn:sequenceFlow id="fn2" sourceRef="None" targetRef="EndNone" />`);
+
 export const PARALLEL_WAIT = wrap(`
     <bpmn:startEvent id="Start" />
     <bpmn:parallelGateway id="Split" />

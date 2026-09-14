@@ -11,6 +11,7 @@ import {
   type ScopeState,
   type TokenState,
 } from './state.js';
+import type { ExpressionMode } from './expression.js';
 import type { TimerScheduler } from './timer-scheduler.js';
 import type { EngineMode, ExecutionStatus, HistoryEntry } from './types.js';
 
@@ -43,6 +44,7 @@ export interface EngineMeta {
   processId: string;
   status: ExecutionStatus;
   mode: EngineMode;
+  expressions: ExpressionMode;
   maxSteps: number;
   steps: number;
   tokenSeq: number;
@@ -87,6 +89,7 @@ export function serializeEngine(runtime: EngineRuntime, meta: EngineMeta): Engin
     processId: meta.processId,
     status: meta.status,
     mode: meta.mode,
+    expressions: meta.expressions,
     maxSteps: meta.maxSteps,
     steps: meta.steps,
     variables: runtime.scopes.rootVariables(),

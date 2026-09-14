@@ -4,6 +4,7 @@ import type { EngineState, ProcessModel } from '../src/index.js';
 import {
   CONDITIONAL_BOUNDARY,
   EVENT_BASED,
+  JS_CONDITION_AFTER_WAIT,
   LINEAR,
   PARALLEL_WAIT,
   SUBPROCESS_WAIT,
@@ -87,6 +88,41 @@ describe('engine state round-trip', () => {
     const done = await eng.start();
     expect(done.status).toBe('completed');
     expect((await eng.resume()).status).toBe('completed');
+  });
+
+  it('keeps the expression mode across a restart', async () => {
+    const p = await process(JS_CONDITION_AFTER_WAIT);
+    const first = new WorkflowEngine(p, {
+      expressions: 'javascript',
+      variables: { itens: [1, 3] },
+    });
+    await first.start();
+    const parked = first.snapshot().tokens.find((t) => t.waitReason === 'userTask')!;
+
+    const second = WorkflowEngine.restore(p, persist(first));
+    const after = await second.completeTask(parked.id);
+
+    // Same diagram, same data: a restart must not change which flow the gateway
+    // takes. Losing the mode would send the token down the default instead.
+    expect(after.completedNodes).toContain('Big');
+    expect(after.completedNodes).not.toContain('None');
+  });
+
+  it('lets the caller override the stored expression mode', async () => {
+    const p = await process(JS_CONDITION_AFTER_WAIT);
+    const first = new WorkflowEngine(p, {
+      expressions: 'javascript',
+      variables: { itens: [1, 3] },
+    });
+    await first.start();
+    const parked = first.snapshot().tokens.find((t) => t.waitReason === 'userTask')!;
+
+    const second = WorkflowEngine.restore(p, persist(first), { expressions: 'safe' });
+    const after = await second.completeTask(parked.id);
+
+    // The safe evaluator refuses the arrow function, so the guard reads as
+    // undefined and the default flow wins.
+    expect(after.completedNodes).toContain('None');
   });
 
   it('rejects a state from another process or version', async () => {

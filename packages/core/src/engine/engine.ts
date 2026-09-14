@@ -466,6 +466,7 @@ export class WorkflowEngine {
       processId: this.rootGraph.process.id,
       status: this.status,
       mode: this.mode,
+      expressions: this.expressions,
       maxSteps: this.maxSteps,
       steps: this.steps,
       tokenSeq: this.tokenSeq,
@@ -518,6 +519,7 @@ export class WorkflowEngine {
     }
     const engine = new WorkflowEngine(process, {
       mode: options.mode ?? state.mode,
+      expressions: options.expressions ?? state.expressions,
       maxSteps: options.maxSteps ?? state.maxSteps,
       variables: state.variables,
       ...(options.processes ? { processes: options.processes } : {}),
