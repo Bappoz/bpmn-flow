@@ -47,6 +47,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "bpmn-moddle": "^10.0.0"
+    "bpmn-moddle": "^10.2.0"
   }
 }
