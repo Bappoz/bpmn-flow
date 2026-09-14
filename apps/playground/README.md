@@ -91,3 +91,22 @@ separado. O editor segue o mesmo caminho, por `import('./editor.js')` dentro de
 `ensureEditor()`.
 
 Quem abre a demo e só executa processos nunca baixa o editor.
+
+## Estrutura do código
+
+Cada módulo tem o seu próprio estado; `main.ts` só monta e liga os eventos.
+
+| Módulo            | Responsabilidade                                                         |
+| ----------------- | ------------------------------------------------------------------------ |
+| `main.ts`         | Resolve os elementos, monta os módulos, liga os eventos. Sem lógica.     |
+| `elements.ts`     | Os nós do HTML, resolvidos uma vez e passados por parâmetro.             |
+| `samples.ts`      | De onde vêm os exemplos: do servidor, ou embutidos no bundle.            |
+| `run-mode.ts`     | Diagrama carregado, motor, viewer e os comandos de execução.             |
+| `guided-run.ts`   | A condução: animação, diálogo por parada e os gateways já respondidos.   |
+| `guided.ts`       | Qual é a próxima parada e o que perguntar nela — função pura, com teste. |
+| `panel.ts`        | A lateral inteira. Só desenha; todo clique volta por um port.            |
+| `edit-mode.ts`    | O editor `bpmn-js`, a validação e a gravação do exemplo.                 |
+| `diagram-view.ts` | Concentra o import do viewer para ele virar um chunk próprio.            |
+
+O que dá para testar sem DOM está em `guided.ts`, coberto em
+`test/guided.test.ts`; o resto é ligação com a página.

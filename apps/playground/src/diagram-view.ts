@@ -8,3 +8,4 @@
 import '@bpmn-flow/viewer/styles.css';
 
 export { BpmnFlowViewer, ExecutionReplay } from '@bpmn-flow/viewer';
+export type { ReplayFrame } from '@bpmn-flow/viewer';
