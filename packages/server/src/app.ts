@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { parseBpmn, validateBpmn, type TaskFilter, type WaitReason } from '@bpmn-flow/core';
 import { Hono } from 'hono';
+import { BadRequestError, jsonBody, optionalJsonBody, requireString } from './http.js';
 import { SampleProvider } from './samples.js';
 import { SessionStore, type CreateSessionInput, type SessionStoreOptions } from './sessions.js';
 import { FileSessionStorage } from './storage.js';
@@ -73,18 +74,19 @@ export function createApp(options: AppOptions = {}): Hono {
   app.get('/api/health', (c) => c.json({ status: 'ok' }));
 
   app.post('/api/parse', async (c) => {
-    const { xml } = await c.req.json<{ xml: string }>();
-    return c.json(await parseBpmn(xml));
+    const { xml } = await jsonBody<{ xml?: unknown }>(c);
+    return c.json(await parseBpmn(requireString(xml, 'xml')));
   });
 
   app.post('/api/validate', async (c) => {
-    const { xml } = await c.req.json<{ xml: string }>();
-    const { valid, issues } = await validateBpmn(xml);
+    const { xml } = await jsonBody<{ xml?: unknown }>(c);
+    const { valid, issues } = await validateBpmn(requireString(xml, 'xml'));
     return c.json({ valid, issues });
   });
 
   app.post('/api/sessions', async (c) => {
-    const body = await c.req.json<CreateSessionInput>();
+    const body = await jsonBody<CreateSessionInput>(c);
+    requireString(body.xml, 'xml');
     return c.json(await sessions.create(body), 201);
   });
 
@@ -96,11 +98,13 @@ export function createApp(options: AppOptions = {}): Hono {
   });
 
   app.post('/api/sessions/:id/complete', async (c) => {
-    const { tokenId, output } = await c.req.json<{
-      tokenId: string;
+    const { tokenId, output } = await jsonBody<{
+      tokenId?: unknown;
       output?: Record<string, unknown>;
-    }>();
-    return c.json(await sessions.complete(c.req.param('id'), tokenId, output));
+    }>(c);
+    return c.json(
+      await sessions.complete(c.req.param('id'), requireString(tokenId, 'tokenId'), output),
+    );
   });
 
   app.get('/api/tasks', async (c) => c.json(await sessions.inbox(taskFilter(c.req.query()))));
@@ -118,25 +122,37 @@ export function createApp(options: AppOptions = {}): Hono {
   );
 
   app.post('/api/sessions/:id/incidents/:tokenId/resolve', async (c) => {
-    const { output } = await c.req
-      .json<{ output?: Record<string, unknown> }>()
-      .catch(() => ({}) as { output?: Record<string, unknown> });
+    const body = await optionalJsonBody<{ output?: Record<string, unknown> }>(c);
     return c.json(
-      await sessions.resolveIncident(c.req.param('id'), c.req.param('tokenId'), output),
+      await sessions.resolveIncident(c.req.param('id'), c.req.param('tokenId'), body?.output),
     );
   });
 
   app.post('/api/sessions/:id/tick', async (c) => {
-    const body = await c.req.json<{ now?: number }>().catch(() => ({}) as { now?: number });
-    return c.json(await sessions.tick(c.req.param('id'), body.now));
+    const body = await optionalJsonBody<{ now?: number }>(c);
+    return c.json(await sessions.tick(c.req.param('id'), body?.now));
   });
 
   app.post('/api/sessions/:id/signal', async (c) => {
-    const { name, output } = await c.req.json<{
-      name: string;
+    const { name, output } = await jsonBody<{
+      name?: unknown;
       output?: Record<string, unknown>;
-    }>();
-    return c.json(await sessions.signal(c.req.param('id'), name, output));
+    }>(c);
+    return c.json(await sessions.signal(c.req.param('id'), requireString(name, 'name'), output));
+  });
+
+  /**
+   * Routes a message to whichever execution correlates with it, instead of
+   * asking the caller which session that is.
+   */
+  app.post('/api/messages', async (c) => {
+    const { name, correlationKey, output } = await jsonBody<{
+      name?: unknown;
+      correlationKey?: unknown;
+      output?: Record<string, unknown>;
+    }>(c);
+    const delivered = await sessions.correlate(requireString(name, 'name'), correlationKey, output);
+    return c.json({ delivered }, delivered.length > 0 ? 200 : 404);
   });
 
   app.delete('/api/sessions/:id', async (c) =>
@@ -152,7 +168,9 @@ export function createApp(options: AppOptions = {}): Hono {
         : c.json({ error: 'Sample not found' }, 404);
     });
     app.post('/api/samples', async (c) => {
-      const { name, xml } = await c.req.json<{ name: string; xml: string }>();
+      const body = await jsonBody<{ name?: unknown; xml?: unknown }>(c);
+      const name = requireString(body.name, 'name');
+      const xml = requireString(body.xml, 'xml');
       const validation = await validateBpmn(xml);
       if (!validation.valid) {
         return c.json({ error: 'Invalid BPMN', issues: validation.issues }, 400);
@@ -163,6 +181,7 @@ export function createApp(options: AppOptions = {}): Hono {
   }
 
   app.onError((err, c) => {
+    if (err instanceof BadRequestError) return c.json({ error: err.message }, 400);
     if (err.name === 'SessionNotFoundError') return c.json({ error: err.message }, 404);
     if (
       err.name === 'BpmnParseError' ||

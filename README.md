@@ -537,8 +537,13 @@ createApp({ expressions: 'javascript' });
   com condição de conclusão e coleção de saída) e loop padrão.
 - **Compensação**: evento de borda de compensação ligado por associação à
   atividade que desfaz o trabalho, disparada em ordem inversa.
-- Fluxos de sequência com condições, colaboração (pools e message flows) e
-  raias (lanes) com os papéis de `potentialOwner`.
+- Fluxos de sequência com condições e raias (lanes) com os papéis de
+  `potentialOwner`.
+- **Colaboração**: `CollaborationEngine` executa todos os pools executáveis do
+  diagrama e roteia cada `messageFlow` do nó de origem para o de destino, ponto
+  a ponto. `bpmn-flow run` usa isso sozinho quando o arquivo tem mais de um pool
+  executável. Pool black-box não roda, e mensagem cujo destino ainda não
+  assinou fica em trânsito até assinar.
 
 ## Limitações conhecidas
 
@@ -551,8 +556,14 @@ createApp({ expressions: 'javascript' });
   que lança, ou que o avaliador recusa, é tratada como `false`.
 - **`ioSpecification` formal não é interpretado**: o mapeamento de dados é lido
   na forma `assignment/from/to`.
-- **Correlação de mensagem por chave** não existe; a entrega é por nome da
-  mensagem ou id do elemento.
+- **Correlação de mensagem por chave** cobre a forma que as ferramentas BPMN
+  escrevem em `extensionElements` (`correlationKey="=pedidoId"`): `correlate()`
+  entrega só para a instância cuja chave bate, e `POST /api/messages` roteia sem
+  o chamador saber a sessão. O mecanismo padrão da spec
+  (`correlationSubscription`/`correlationPropertyBinding`) não é lido; sem chave
+  declarada a entrega volta a ser por nome.
+- **O servidor HTTP roda um pool por sessão**: `CollaborationEngine` é a API de
+  colaboração; `SessionStore` ainda cria uma sessão por processo executável.
 - **DMN está fora de escopo**: `businessRuleTask` é o ponto de extensão — ligue
   um handler ao seu motor de decisão.
 

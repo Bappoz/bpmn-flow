@@ -1,4 +1,4 @@
-import type { ElementKind, EventDefinitionKind } from './kinds.js';
+import type { DataElementKind, ElementKind, EventDefinitionKind } from './kinds.js';
 
 /**
  * Normalized, serializable BPMN model.
@@ -86,6 +86,12 @@ export interface FlowNode {
   /** Every event definition declared on the event, in document order. */
   events?: EventDetail[];
 
+  /**
+   * Multiple events: every declared trigger has to arrive before the event
+   * fires. Without it (the specification's default) the first one is enough.
+   */
+  parallelMultiple?: boolean;
+
   /** Boundary events: id of the activity they are attached to. */
   attachedToRef?: string;
   /** Boundary events: false for non-interrupting boundary events. */
@@ -101,6 +107,16 @@ export interface FlowNode {
 
   /** Receive/send tasks: name of the message they wait for or emit. */
   messageRef?: string;
+  /**
+   * Message events and receive tasks: expression picking the value that
+   * identifies *this* instance among every instance listening for the same
+   * message, read from the message's `extensionElements`
+   * (`correlationKey="=pedidoId"`).
+   *
+   * Without it, a message of that name reaches every subscriber — a broadcast,
+   * not a message.
+   */
+  correlationKey?: string;
 
   /** Ad-hoc subprocess: expression that ends it before every activity ran. */
   completionCondition?: string;
@@ -159,6 +175,22 @@ export interface DataMapping {
   to: string;
 }
 
+/**
+ * Data the diagram declares: a data object, a data store, or a reference to
+ * either. The engine does not move data through them — variables do that — but
+ * they are what the process says it works on, which a viewer or an editor
+ * shows and `ioSpecification` builds on.
+ */
+export interface DataElement {
+  id: string;
+  kind: DataElementKind;
+  name?: string;
+  /** Reference kinds: id of the data object or data store they point at. */
+  dataRef?: string;
+  /** Data objects declared as a collection (`isCollection="true"`). */
+  isCollection?: boolean;
+}
+
 /** A participant (pool) in a collaboration. */
 export interface Participant {
   id: string;
@@ -183,6 +215,21 @@ export interface ProcessModel {
   sequenceFlows: SequenceFlow[];
   /** Associations declared in the scope (compensation wiring). */
   associations?: Association[];
+  /** Data objects, data references and data stores declared in the scope. */
+  dataElements?: DataElement[];
+}
+
+/**
+ * A BPMN element the parser saw and did not model, so the engine will not act
+ * on it. Recorded rather than dropped, so `validate()` can say out loud which
+ * parts of the diagram will not run.
+ */
+export interface UnsupportedElement {
+  /** Local XML name, e.g. `ioSpecification`. */
+  type: string;
+  id?: string;
+  /** Element that declares it, when it hangs off a node or a process. */
+  ownerId?: string;
 }
 
 /** Root of a parsed BPMN file: one or more processes plus collaboration info. */
@@ -192,4 +239,8 @@ export interface BpmnModel {
   processes: ProcessModel[];
   participants: Participant[];
   messageFlows: MessageFlow[];
+  /** `bpmn:dataStore` elements, which the spec declares outside any process. */
+  dataStores: DataElement[];
+  /** Elements present in the XML that the parser does not model. */
+  unsupported: UnsupportedElement[];
 }

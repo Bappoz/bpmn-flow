@@ -1,7 +1,12 @@
 import {
+  CollaborationEngine,
+  executableProcess,
   parseBpmn,
   validateBpmn,
   WorkflowEngine,
+  type BpmnModel,
+  type CollaborationSnapshot,
+  type CollaborationState,
   type EngineMode,
   type EngineState,
   type ExecutionSnapshot,
@@ -44,6 +49,22 @@ export interface RunResult extends CommandResult {
   state: EngineState;
 }
 
+/** What `runCollaboration` returns: one execution per pool. */
+export interface CollaborationRunResult extends CommandResult {
+  collaboration: CollaborationSnapshot;
+  state: CollaborationState;
+}
+
+export interface CollaborationRunOptions extends Omit<RunOptions, 'state'> {
+  /** Previously stored collaboration state to continue instead of starting. */
+  state?: CollaborationState;
+}
+
+/** Whether the file declares more than one pool that can actually run. */
+export function isCollaboration(model: BpmnModel): boolean {
+  return model.processes.filter((process) => process.isExecutable).length > 1;
+}
+
 const CHECK = '✓';
 const CROSS = '✗';
 
@@ -78,6 +99,11 @@ export async function inspect(xml: string): Promise<CommandResult> {
     const lanes = [...new Set(nodes.map((node) => node.lane).filter(Boolean))];
     if (lanes.length > 0) lines.push(`  lanes: ${lanes.join(', ')}`);
 
+    const data = process.dataElements ?? [];
+    if (data.length > 0) {
+      lines.push(`  data: ${data.map((d) => `${d.name ?? d.id} (${d.kind})`).join(', ')}`);
+    }
+
     const repeated = nodes.filter((node) => node.loop);
     for (const node of repeated) {
       const loop = node.loop!;
@@ -99,14 +125,21 @@ export async function inspect(xml: string): Promise<CommandResult> {
   if (model.participants.length > 0) {
     lines.push(`participants: ${model.participants.map((p) => p.name ?? p.id).join(', ')}`);
   }
+  if (model.dataStores.length > 0) {
+    lines.push(`data stores: ${model.dataStores.map((d) => d.name ?? d.id).join(', ')}`);
+  }
   return { output: lines.join('\n'), exitCode: 0 };
 }
 
-/** `bpmn-flow run <file>` — executes and reports where it stopped. */
+/**
+ * `bpmn-flow run <file>` — executes and reports where it stopped.
+ *
+ * A collaboration with more than one executable pool runs all of them, with
+ * the message flows routed between them; see {@link runCollaboration}.
+ */
 export async function run(xml: string, options: RunOptions = {}): Promise<RunResult> {
   const model = await parseBpmn(xml);
-  const process = model.processes[0];
-  if (!process) throw new Error('No executable process found in the diagram.');
+  const process = executableProcess(model);
 
   const engine = options.state
     ? WorkflowEngine.restore(process, options.state, {
@@ -160,6 +193,61 @@ export async function run(xml: string, options: RunOptions = {}): Promise<RunRes
     output: lines.join('\n'),
     exitCode: snapshot.status === 'failed' ? 1 : 0,
     snapshot,
+    state: engine.getState(),
+  };
+}
+
+/**
+ * Runs every executable pool of a collaboration in one go, routing the message
+ * flows between them, and reports each pool separately.
+ */
+export async function runCollaboration(
+  xml: string,
+  options: CollaborationRunOptions = {},
+): Promise<CollaborationRunResult> {
+  const model = await parseBpmn(xml);
+  const engineOptions = {
+    ...(options.expressions ? { expressions: options.expressions } : {}),
+    ...(options.mode ? { mode: options.mode } : {}),
+    ...(options.variables ? { variables: options.variables } : {}),
+    ...(options.onHandlerError ? { onHandlerError: options.onHandlerError } : {}),
+    ...(options.retry ? { retry: options.retry } : {}),
+  };
+  const engine = options.state
+    ? CollaborationEngine.restore(model, options.state, engineOptions)
+    : new CollaborationEngine(model, engineOptions);
+  for (const [selector, handler] of Object.entries(options.handlers ?? {})) {
+    engine.registerHandler(selector, handler);
+  }
+
+  const snapshot = options.state ? await engine.resume() : await engine.start();
+  const lines = [`status: ${snapshot.status}`];
+  for (const pool of snapshot.pools) {
+    lines.push(`pool ${pool.name ?? pool.processId} (${pool.processId}): ${pool.snapshot.status}`);
+    lines.push(`  path: ${pool.snapshot.completedNodes.join(' -> ')}`);
+  }
+  if (snapshot.messages.length > 0) {
+    lines.push('messages:');
+    for (const message of snapshot.messages) {
+      lines.push(
+        `  ${message.name ?? message.flowId}: ${message.from} -> ${message.to} (${message.nodeId})`,
+      );
+    }
+  }
+  for (const message of snapshot.inflight) {
+    lines.push(`  ! ${message.flowId} not delivered: ${message.targetNodeId} is not listening`);
+  }
+
+  const tasks = engine.tasks();
+  if (tasks.length > 0) {
+    lines.push('pending:');
+    for (const task of tasks) lines.push(`  ${task.processId}: ${describeTask(task)}`);
+  }
+
+  return {
+    output: lines.join('\n'),
+    exitCode: snapshot.status === 'failed' ? 1 : 0,
+    collaboration: snapshot,
     state: engine.getState(),
   };
 }

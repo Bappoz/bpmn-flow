@@ -1,6 +1,7 @@
 export * from './model/kinds.js';
 export * from './model/types.js';
 export { ProcessGraph } from './model/graph.js';
+export { executableProcess, findExecutableProcess } from './model/executable.js';
 export { processVariables, suggestVariables } from './model/variables.js';
 export type { VariableUsage } from './model/variables.js';
 export { decisionsAfter } from './model/decisions.js';
@@ -12,6 +13,17 @@ export { addFlowReferences } from './parser/references.js';
 export { validateBpmn, validateModel } from './validate.js';
 export type { ValidationIssue, ValidationResult } from './validate.js';
 export { WorkflowEngine } from './engine/engine.js';
+export { CollaborationEngine } from './engine/collaboration.js';
+export type {
+  CollaborationOptions,
+  CollaborationParticipant,
+  CollaborationPoolSnapshot,
+  CollaborationSnapshot,
+  CollaborationState,
+  CollaborationTask,
+  DeliveredMessage,
+  InflightMessage,
+} from './engine/collaboration.js';
 export { criticalPath } from './engine/critical-path.js';
 export type { CriticalPathResult } from './engine/critical-path.js';
 export { ENGINE_STATE_VERSION } from './engine/state.js';

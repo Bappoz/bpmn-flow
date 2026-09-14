@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  executableProcess,
   parseBpmn,
   WorkflowEngine,
   type EngineMode,
@@ -80,9 +81,15 @@ export interface SessionStoreOptions {
  * every change is written through it and a session missing from the cache is
  * rebuilt from its stored state — so a restarted server picks executions up
  * exactly where they stopped.
+ *
+ * Every operation that touches an engine is queued per session, so concurrent
+ * requests on the same execution run one after the other instead of sharing
+ * the engine's ready queue. Different sessions never wait on each other.
  */
 export class SessionStore {
   private readonly cache = new Map<string, LiveSession>();
+  /** Tail of the pending work queued for each session, by session id. */
+  private readonly queues = new Map<string, Promise<void>>();
   private readonly storage: SessionStorage | undefined;
   private readonly handlers: Record<string, TaskHandler>;
   private readonly expressions: ExpressionMode;
@@ -91,6 +98,29 @@ export class SessionStore {
     this.storage = options.storage;
     this.handlers = options.handlers ?? {};
     this.expressions = options.expressions ?? 'safe';
+  }
+
+  /**
+   * Runs `task` after everything already queued for this session.
+   *
+   * The engine's contract is that tokens are processed one at a time, which
+   * two concurrent requests entering `drain()` would break: they would share
+   * the ready queue and answer each other's execution. Serializing per session
+   * keeps that invariant without blocking unrelated sessions.
+   */
+  private queued<T>(id: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.queues.get(id) ?? Promise.resolve();
+    const run = previous.then(task, task);
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.queues.set(id, tail);
+    void tail.then(() => {
+      // Only the last one out turns the light off.
+      if (this.queues.get(id) === tail) this.queues.delete(id);
+    });
+    return run;
   }
 
   /** Applies the store's automation to a freshly built engine. */
@@ -121,21 +151,27 @@ export class SessionStore {
   }
 
   async get(id: string): Promise<Session | undefined> {
-    const session = await this.load(id);
-    return session ? view(session) : undefined;
+    return this.queued(id, async () => {
+      const session = await this.load(id);
+      return session ? view(session) : undefined;
+    });
   }
 
   async complete(id: string, tokenId: string, output?: Record<string, unknown>): Promise<Session> {
-    const session = await this.require(id);
-    session.snapshot = await session.engine.completeTask(tokenId, output);
-    await this.persist(session);
-    return view(session);
+    return this.queued(id, async () => {
+      const session = await this.require(id);
+      session.snapshot = await session.engine.completeTask(tokenId, output);
+      await this.persist(session);
+      return view(session);
+    });
   }
 
   /** Work waiting on a person in one session. */
   async tasks(id: string, filter?: TaskFilter): Promise<PendingTask[]> {
-    const session = await this.require(id);
-    return session.engine.tasks(filter);
+    return this.queued(id, async () => {
+      const session = await this.require(id);
+      return session.engine.tasks(filter);
+    });
   }
 
   /**
@@ -143,35 +179,35 @@ export class SessionStore {
    * already finished are skipped without rebuilding their engine.
    */
   async inbox(filter?: TaskFilter): Promise<InboxTask[]> {
-    const ids = new Set<string>();
-    for (const record of (await this.storage?.list()) ?? []) {
-      if (record.state.tokens.some((token) => token.waiting !== undefined)) ids.add(record.id);
-    }
-    for (const [id, session] of this.cache) {
-      if (session.snapshot.tokens.some((token) => token.waiting)) ids.add(id);
-    }
+    const ids = await this.waitingIds();
 
     const inbox: InboxTask[] = [];
     for (const id of ids) {
-      const session = await this.load(id);
-      if (!session) continue;
-      for (const task of session.engine.tasks(filter)) inbox.push({ sessionId: id, ...task });
+      const tasks = await this.queued(id, async () => {
+        const session = await this.load(id);
+        return session?.engine.tasks(filter) ?? [];
+      });
+      for (const task of tasks) inbox.push({ sessionId: id, ...task });
     }
     return inbox;
   }
 
   /** Activities of one session whose handler failed. */
   async incidents(id: string): Promise<IncidentState[]> {
-    const session = await this.require(id);
-    return session.engine.incidentList();
+    return this.queued(id, async () => {
+      const session = await this.require(id);
+      return session.engine.incidentList();
+    });
   }
 
   /** Runs a failed activity again. */
   async retry(id: string, tokenId: string): Promise<Session> {
-    const session = await this.require(id);
-    session.snapshot = await session.engine.retryTask(tokenId);
-    await this.persist(session);
-    return view(session);
+    return this.queued(id, async () => {
+      const session = await this.require(id);
+      session.snapshot = await session.engine.retryTask(tokenId);
+      await this.persist(session);
+      return view(session);
+    });
   }
 
   /** Gives up on a failed activity and moves the process on. */
@@ -180,18 +216,22 @@ export class SessionStore {
     tokenId: string,
     output?: Record<string, unknown>,
   ): Promise<Session> {
-    const session = await this.require(id);
-    session.snapshot = await session.engine.resolveIncident(tokenId, output);
-    await this.persist(session);
-    return view(session);
+    return this.queued(id, async () => {
+      const session = await this.require(id);
+      session.snapshot = await session.engine.resolveIncident(tokenId, output);
+      await this.persist(session);
+      return view(session);
+    });
   }
 
   /** Fires the timers of one session that are due at `now`. */
   async tick(id: string, now?: number): Promise<Session> {
-    const session = await this.require(id);
-    session.snapshot = await session.engine.tick(now);
-    await this.persist(session);
-    return view(session);
+    return this.queued(id, async () => {
+      const session = await this.require(id);
+      session.snapshot = await session.engine.tick(now);
+      await this.persist(session);
+      return view(session);
+    });
   }
 
   /**
@@ -215,17 +255,61 @@ export class SessionStore {
     return advanced;
   }
 
+  /**
+   * Routes a message to the executions that correlate with it: the ones with a
+   * subscription of that name whose key resolves to `correlationKey`. Returns
+   * the ids that took it, so a caller can tell "nobody is waiting for this"
+   * from "delivered".
+   *
+   * Unlike {@link signal}, which is addressed at one session, this is how a
+   * "pedido 42 pago" event coming from outside finds its instance.
+   */
+  async correlate(
+    name: string,
+    correlationKey: unknown,
+    output?: Record<string, unknown>,
+  ): Promise<string[]> {
+    const delivered: string[] = [];
+    for (const id of await this.waitingIds()) {
+      const took = await this.queued(id, async () => {
+        const session = await this.load(id);
+        if (!session?.engine.subscribedTo(name, correlationKey)) return false;
+        session.snapshot = await session.engine.correlate(name, correlationKey, output);
+        await this.persist(session);
+        return true;
+      });
+      if (took) delivered.push(id);
+    }
+    return delivered;
+  }
+
+  /** Ids of the sessions that have a token parked on something. */
+  private async waitingIds(): Promise<Set<string>> {
+    const ids = new Set<string>();
+    for (const record of (await this.storage?.list()) ?? []) {
+      if (record.state.tokens.some((token) => token.waiting !== undefined)) ids.add(record.id);
+    }
+    for (const [id, session] of this.cache) {
+      if (session.snapshot.tokens.some((token) => token.waiting)) ids.add(id);
+    }
+    return ids;
+  }
+
   async signal(id: string, name: string, output?: Record<string, unknown>): Promise<Session> {
-    const session = await this.require(id);
-    session.snapshot = await session.engine.signal(name, output);
-    await this.persist(session);
-    return view(session);
+    return this.queued(id, async () => {
+      const session = await this.require(id);
+      session.snapshot = await session.engine.signal(name, output);
+      await this.persist(session);
+      return view(session);
+    });
   }
 
   async delete(id: string): Promise<boolean> {
-    const removedFromCache = this.cache.delete(id);
-    const removedFromStorage = (await this.storage?.remove(id)) ?? false;
-    return removedFromCache || removedFromStorage;
+    return this.queued(id, async () => {
+      const removedFromCache = this.cache.delete(id);
+      const removedFromStorage = (await this.storage?.remove(id)) ?? false;
+      return removedFromCache || removedFromStorage;
+    });
   }
 
   /**
@@ -296,9 +380,7 @@ async function readProcesses(
   xml: string,
 ): Promise<{ process: ProcessModel; processes: ProcessModel[] }> {
   const model = await parseBpmn(xml);
-  const process = model.processes[0];
-  if (!process) throw new Error('No executable process found.');
-  return { process, processes: model.processes };
+  return { process: executableProcess(model), processes: model.processes };
 }
 
 function view(session: LiveSession): Session {

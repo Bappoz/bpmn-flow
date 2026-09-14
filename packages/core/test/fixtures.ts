@@ -936,3 +936,164 @@ export const DATA_MAPPING = `<?xml version="1.0" encoding="UTF-8"?>
     <bpmn:sequenceFlow id="f1" sourceRef="Chamar" targetRef="End" />
   </bpmn:process>
 </bpmn:definitions>`;
+
+/**
+ * Collaboration whose first pool is a black box (`isExecutable="false"`), as
+ * BPMN tools routinely emit when the counterpart is an external party.
+ */
+export const COLLABORATION_BLACKBOX_FIRST = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions ${NS} id="Defs">
+  <bpmn:collaboration id="Collab">
+    <bpmn:participant id="PartBlack" name="BlackBox" processRef="BlackBox" />
+    <bpmn:participant id="PartMain" name="Loja" processRef="Main" />
+  </bpmn:collaboration>
+  <bpmn:process id="BlackBox" isExecutable="false" />
+  <bpmn:process id="Main" isExecutable="true">
+    <bpmn:startEvent id="Start" />
+    <bpmn:task id="Work" name="Trabalho" />
+    <bpmn:endEvent id="End" />
+    <bpmn:sequenceFlow id="f1" sourceRef="Start" targetRef="Work" />
+    <bpmn:sequenceFlow id="f2" sourceRef="Work" targetRef="End" />
+  </bpmn:process>
+</bpmn:definitions>`;
+
+/** Every pool is a black box: nothing in the file can be executed. */
+export const COLLABORATION_ALL_BLACKBOX = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions ${NS} id="Defs">
+  <bpmn:collaboration id="Collab">
+    <bpmn:participant id="PartA" name="Cliente" processRef="A" />
+  </bpmn:collaboration>
+  <bpmn:process id="A" name="Cliente" isExecutable="false">
+    <bpmn:startEvent id="Start" />
+  </bpmn:process>
+</bpmn:definitions>`;
+
+/**
+ * A catch event and a boundary event that both declare two message triggers and
+ * ask for `parallelMultiple`: the spec requires every trigger to arrive.
+ */
+export const PARALLEL_MULTIPLE = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions ${NS} id="Defs">
+  <bpmn:message id="MsgPago" name="pago" />
+  <bpmn:message id="MsgNota" name="nota" />
+  <bpmn:process id="P" isExecutable="true">
+    <bpmn:startEvent id="Start" />
+    <bpmn:intermediateCatchEvent id="Aguardar" parallelMultiple="true">
+      <bpmn:messageEventDefinition messageRef="MsgPago" />
+      <bpmn:messageEventDefinition messageRef="MsgNota" />
+    </bpmn:intermediateCatchEvent>
+    <bpmn:task id="Expedir" />
+    <bpmn:endEvent id="End" />
+    <bpmn:sequenceFlow id="f0" sourceRef="Start" targetRef="Aguardar" />
+    <bpmn:sequenceFlow id="f1" sourceRef="Aguardar" targetRef="Expedir" />
+    <bpmn:sequenceFlow id="f2" sourceRef="Expedir" targetRef="End" />
+  </bpmn:process>
+</bpmn:definitions>`;
+
+/** Same triggers, without `parallelMultiple`: the first one that lands fires. */
+export const ANY_MULTIPLE = PARALLEL_MULTIPLE.replace(' parallelMultiple="true"', '');
+
+/** Boundary event that only interrupts once both triggers arrived. */
+export const PARALLEL_MULTIPLE_BOUNDARY = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions ${NS} id="Defs">
+  <bpmn:message id="MsgPago" name="pago" />
+  <bpmn:message id="MsgNota" name="nota" />
+  <bpmn:process id="P" isExecutable="true">
+    <bpmn:startEvent id="Start" />
+    <bpmn:userTask id="Conferir" />
+    <bpmn:boundaryEvent id="Ambos" attachedToRef="Conferir" parallelMultiple="true">
+      <bpmn:messageEventDefinition messageRef="MsgPago" />
+      <bpmn:messageEventDefinition messageRef="MsgNota" />
+    </bpmn:boundaryEvent>
+    <bpmn:task id="Acelerar" />
+    <bpmn:endEvent id="End" />
+    <bpmn:endEvent id="EndAlt" />
+    <bpmn:sequenceFlow id="f0" sourceRef="Start" targetRef="Conferir" />
+    <bpmn:sequenceFlow id="f1" sourceRef="Conferir" targetRef="End" />
+    <bpmn:sequenceFlow id="fb" sourceRef="Ambos" targetRef="Acelerar" />
+    <bpmn:sequenceFlow id="fb2" sourceRef="Acelerar" targetRef="EndAlt" />
+  </bpmn:process>
+</bpmn:definitions>`;
+
+/**
+ * Two instances of this process wait for the same message name; only the one
+ * whose `pedidoId` matches the delivered key may wake up.
+ */
+export const MESSAGE_CORRELATION = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions ${NS} xmlns:zeebe="http://camunda.org/schema/zeebe/1.0" id="Defs">
+  <bpmn:message id="MsgPago" name="pedido-pago">
+    <bpmn:extensionElements>
+      <zeebe:subscription correlationKey="=pedidoId" />
+    </bpmn:extensionElements>
+  </bpmn:message>
+  <bpmn:process id="P" isExecutable="true">
+    <bpmn:startEvent id="Start" />
+    <bpmn:intermediateCatchEvent id="AguardarPagamento">
+      <bpmn:messageEventDefinition messageRef="MsgPago" />
+    </bpmn:intermediateCatchEvent>
+    <bpmn:task id="Expedir" />
+    <bpmn:endEvent id="End" />
+    <bpmn:sequenceFlow id="f0" sourceRef="Start" targetRef="AguardarPagamento" />
+    <bpmn:sequenceFlow id="f1" sourceRef="AguardarPagamento" targetRef="Expedir" />
+    <bpmn:sequenceFlow id="f2" sourceRef="Expedir" targetRef="End" />
+  </bpmn:process>
+</bpmn:definitions>`;
+
+/** Same message name, no correlation key declared: name is all there is. */
+export const MESSAGE_NO_CORRELATION = MESSAGE_CORRELATION.replace(
+  /<bpmn:extensionElements>[\s\S]*?<\/bpmn:extensionElements>/,
+  '',
+);
+
+/** Correlation key on a receive task instead of a catch event. */
+export const MESSAGE_CORRELATION_RECEIVE_TASK = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions ${NS} xmlns:zeebe="http://camunda.org/schema/zeebe/1.0" id="Defs">
+  <bpmn:message id="MsgPago" name="pedido-pago">
+    <bpmn:extensionElements>
+      <zeebe:subscription correlationKey="=pedidoId" />
+    </bpmn:extensionElements>
+  </bpmn:message>
+  <bpmn:process id="P" isExecutable="true">
+    <bpmn:startEvent id="Start" />
+    <bpmn:receiveTask id="Receber" messageRef="MsgPago" />
+    <bpmn:endEvent id="End" />
+    <bpmn:sequenceFlow id="f0" sourceRef="Start" targetRef="Receber" />
+    <bpmn:sequenceFlow id="f1" sourceRef="Receber" targetRef="End" />
+  </bpmn:process>
+</bpmn:definitions>`;
+
+/**
+ * Two executable pools wired by message flows in both directions: the customer
+ * sends an order, the shop confirms it. Neither pool can finish alone.
+ */
+export const COLLABORATION_TWO_POOLS = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions ${NS} id="Defs">
+  <bpmn:collaboration id="Collab">
+    <bpmn:participant id="PartCliente" name="Cliente" processRef="Cliente" />
+    <bpmn:participant id="PartLoja" name="Loja" processRef="Loja" />
+    <bpmn:messageFlow id="mfPedido" name="Pedido" sourceRef="EnviarPedido" targetRef="ReceberPedido" />
+    <bpmn:messageFlow id="mfOk" name="Confirmacao" sourceRef="Confirmar" targetRef="ReceberOk" />
+  </bpmn:collaboration>
+  <bpmn:process id="Cliente" name="Cliente" isExecutable="true">
+    <bpmn:startEvent id="C1" />
+    <bpmn:sendTask id="EnviarPedido" name="Enviar pedido" />
+    <bpmn:intermediateCatchEvent id="ReceberOk" name="Receber confirmacao">
+      <bpmn:messageEventDefinition />
+    </bpmn:intermediateCatchEvent>
+    <bpmn:endEvent id="C2" />
+    <bpmn:sequenceFlow id="c1" sourceRef="C1" targetRef="EnviarPedido" />
+    <bpmn:sequenceFlow id="c2" sourceRef="EnviarPedido" targetRef="ReceberOk" />
+    <bpmn:sequenceFlow id="c3" sourceRef="ReceberOk" targetRef="C2" />
+  </bpmn:process>
+  <bpmn:process id="Loja" name="Loja" isExecutable="true">
+    <bpmn:startEvent id="L1" />
+    <bpmn:receiveTask id="ReceberPedido" name="Receber pedido" />
+    <bpmn:userTask id="Separar" name="Separar itens" />
+    <bpmn:sendTask id="Confirmar" name="Confirmar" />
+    <bpmn:endEvent id="L2" />
+    <bpmn:sequenceFlow id="l1" sourceRef="L1" targetRef="ReceberPedido" />
+    <bpmn:sequenceFlow id="l2" sourceRef="ReceberPedido" targetRef="Separar" />
+    <bpmn:sequenceFlow id="l3" sourceRef="Separar" targetRef="Confirmar" />
+    <bpmn:sequenceFlow id="l4" sourceRef="Confirmar" targetRef="L2" />
+  </bpmn:process>
+</bpmn:definitions>`;

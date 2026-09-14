@@ -14,7 +14,7 @@ import type { EngineMode, ExecutionStatus, HistoryEntry, WaitReason } from './ty
  *
  * Bump {@link ENGINE_STATE_VERSION} whenever the shape changes.
  */
-export const ENGINE_STATE_VERSION = 7;
+export const ENGINE_STATE_VERSION = 9;
 
 /** Where a token currently sits, since not every token lives in a scope. */
 export type TokenPlacement =
@@ -117,6 +117,13 @@ export interface InclusiveBufferState {
   tokenIds: string[];
 }
 
+/** Partial trigger set of a multiple event that needs all of them. */
+export interface MultiTriggerState {
+  /** `eventNodeId:tokenId` for a catch event, `eventNodeId:scopeId` otherwise. */
+  key: string;
+  received: string[];
+}
+
 export interface EventChoiceState {
   tokenId: string;
   alternatives: { eventNodeId: string; flowId: string }[];
@@ -149,4 +156,15 @@ export interface EngineState {
   incidents: IncidentState[];
   /** `eventNodeId -> tokenId` of the gateway waiting on that event. */
   armedEvents: [string, string][];
+  /**
+   * `boundaryId:hostTokenId` of the conditional boundary activations that
+   * already fired. Without them a restored execution would evaluate the same
+   * condition again and fire a second time.
+   */
+  firedConditionals: string[];
+  /**
+   * Triggers already received by a `parallelMultiple` event that is still
+   * waiting for the rest, keyed by the activation they belong to.
+   */
+  multiTriggers: MultiTriggerState[];
 }

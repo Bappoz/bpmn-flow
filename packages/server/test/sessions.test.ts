@@ -17,6 +17,24 @@ const XML = `<?xml version="1.0" encoding="UTF-8"?>
   </bpmn:process>
 </bpmn:definitions>`;
 
+/** First pool is a black box; only the second one can run. */
+const COLLAB = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  targetNamespace="http://bpmn-flow.test" id="Defs">
+  <bpmn:collaboration id="Collab">
+    <bpmn:participant id="PartBlack" name="BlackBox" processRef="BlackBox" />
+    <bpmn:participant id="PartMain" name="Loja" processRef="Main" />
+  </bpmn:collaboration>
+  <bpmn:process id="BlackBox" isExecutable="false" />
+  <bpmn:process id="Main" isExecutable="true">
+    <bpmn:startEvent id="Start" />
+    <bpmn:userTask id="Approve" />
+    <bpmn:endEvent id="End" />
+    <bpmn:sequenceFlow id="f0" sourceRef="Start" targetRef="Approve" />
+    <bpmn:sequenceFlow id="f1" sourceRef="Approve" targetRef="End" />
+  </bpmn:process>
+</bpmn:definitions>`;
+
 let dir: string;
 
 beforeEach(async () => {
@@ -248,5 +266,14 @@ describe('file storage edge cases', () => {
     await new SessionStore({ storage }).create({ xml: XML });
     await writeFile(join(dir, 'anotacao.txt'), 'nao sou uma sessao', 'utf8');
     expect(await storage.list()).toHaveLength(1);
+  });
+});
+
+describe('SessionStore on a collaboration', () => {
+  it('starts the executable pool even when a black box comes first', async () => {
+    const store = new SessionStore();
+    const created = await store.create({ xml: COLLAB });
+    expect(created.snapshot.status).toBe('waiting');
+    expect(created.snapshot.completedNodes).toContain('Start');
   });
 });

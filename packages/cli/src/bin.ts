@@ -2,14 +2,18 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { inspect, run, validate } from './commands.js';
-import type { EngineMode, EngineState, TaskHandler } from '@bpmn-flow/core';
+import { inspect, isCollaboration, run, runCollaboration, validate } from './commands.js';
+import { parseBpmn } from '@bpmn-flow/core';
+import type { CollaborationState, EngineMode, EngineState, TaskHandler } from '@bpmn-flow/core';
 
 const USAGE = `bpmn-flow — BPMN 2.0 from the terminal
 
   bpmn-flow validate <file.bpmn>
   bpmn-flow inspect  <file.bpmn>
   bpmn-flow run      <file.bpmn> [options]
+
+A file with more than one executable pool runs as a collaboration: every pool
+executes and the message flows between them are routed.
 
 Options for run:
   --vars <json>      initial process variables, e.g. '{"valor":2500}'
@@ -76,17 +80,27 @@ async function main(): Promise<number> {
       const retries = arg(argv, 'retry');
       const handlers = handlersFile ? await loadHandlers(handlersFile) : undefined;
 
-      const result = await run(xml, {
+      const shared = {
         ...(varsText ? { variables: JSON.parse(varsText) as Record<string, unknown> } : {}),
         ...(mode ? { mode } : {}),
         ...(handlers ? { handlers } : {}),
         ...(argv.includes('--incidents') ? { onHandlerError: 'incident' as const } : {}),
         ...(retries ? { retry: { attempts: Number(retries) } } : {}),
         ...(argv.includes('--js-expressions') ? { expressions: 'javascript' as const } : {}),
-        ...(stateFile
-          ? { state: JSON.parse(await readFile(stateFile, 'utf8')) as EngineState }
-          : {}),
-      });
+      };
+      const stored = stateFile ? ((await readFile(stateFile, 'utf8')) as string) : undefined;
+
+      // More than one executable pool: run the whole collaboration, with the
+      // message flows routed between the pools.
+      const result = isCollaboration(await parseBpmn(xml))
+        ? await runCollaboration(xml, {
+            ...shared,
+            ...(stored ? { state: JSON.parse(stored) as CollaborationState } : {}),
+          })
+        : await run(xml, {
+            ...shared,
+            ...(stored ? { state: JSON.parse(stored) as EngineState } : {}),
+          });
       console.log(result.output);
       if (saveFile) {
         await writeFile(saveFile, JSON.stringify(result.state, null, 2), 'utf8');

@@ -15,6 +15,7 @@ export type {
 export { FileSessionStorage, InvalidSessionIdError } from './storage.js';
 export type { SessionRecord, SessionStorage } from './storage.js';
 export { SampleProvider, type SampleInfo } from './samples.js';
+export { BadRequestError } from './http.js';
 
 export interface ServerOptions extends AppOptions {
   port?: number;

@@ -15,6 +15,7 @@ import { BpmnError, HandlerRegistry, type TaskHandler } from './handlers.js';
 import {
   ENGINE_STATE_VERSION,
   type EngineState,
+  type MultiTriggerState,
   type IncidentState,
   type ScopeState,
   type TokenState,
@@ -91,6 +92,11 @@ interface LoopRun {
   instanceScopes: Set<Scope>;
 }
 
+/** A message delivery narrowed to the instance the key identifies. */
+interface Correlation {
+  key: unknown;
+}
+
 interface EventChoice {
   token: RuntimeToken;
   alternatives: { eventNodeId: string; flowId: string }[];
@@ -127,6 +133,8 @@ export class WorkflowEngine {
   private readonly incidents = new Map<string, IncidentState>();
   /** `boundaryId:hostTokenId` of conditional boundaries already fired. */
   private readonly firedConditionals = new Set<string>();
+  /** Triggers collected so far by each waiting `parallelMultiple` event. */
+  private readonly multiTriggers = new Map<string, Set<string>>();
   /** Pending timers keyed by `tokenId:nodeId`. */
   private readonly timers = new Map<string, TimerState>();
   private readonly armedEvents = new Map<string, string>();
@@ -235,6 +243,65 @@ export class WorkflowEngine {
     }
     await this.drain();
     return this.snapshot();
+  }
+
+  /**
+   * Delivers a *message*, which unlike a signal is point to point: it only
+   * reaches the subscribers whose correlation key resolves to
+   * `correlationKey`. A subscriber that declares no key has nothing to
+   * discriminate on and accepts the message by name, as before.
+   *
+   * Nothing matching is a normal outcome — a message nobody is waiting for is
+   * simply dropped — so this does not throw. Ask {@link subscribedTo} first
+   * when the caller needs to know.
+   */
+  async correlate(
+    name: string,
+    correlationKey: unknown,
+    output?: Record<string, unknown>,
+  ): Promise<ExecutionSnapshot> {
+    if (output) this.assignVariables(this.scopes[0], output);
+    this.deliverSignal(name, { key: correlationKey });
+    await this.drain();
+    return this.snapshot();
+  }
+
+  /**
+   * Whether this execution has a subscription that would accept the message —
+   * the right name, and a correlation key that resolves to `correlationKey`.
+   * Lets a router pick the instance a message belongs to without mutating any
+   * of the others. Omitting the key asks by name alone.
+   */
+  subscribedTo(name: string, correlationKey?: unknown): boolean {
+    const correlation = correlationKey === undefined ? undefined : { key: correlationKey };
+    for (const token of this.waiting.values()) {
+      if (token.waiting !== 'catchEvent' && token.waiting !== 'receiveTask') continue;
+      const node = token.scope.graph.node(token.nodeId);
+      if (node && matchesTrigger(node, name) && this.correlates(node, token.scope, correlation)) {
+        return true;
+      }
+    }
+    for (const scope of this.scopes) {
+      for (const node of scope.graph.allNodes()) {
+        const subscribes =
+          (node.kind === 'boundaryEvent' && node.attachedToRef !== undefined) ||
+          (node.kind === 'startEvent' && this.isEventSubProcessStart(scope, node));
+        if (!subscribes || !matchesTrigger(node, name)) continue;
+        if (this.correlates(node, scope, correlation)) return true;
+      }
+    }
+    return false;
+  }
+
+  /** Whether this start event belongs to an event subprocess of the scope. */
+  private isEventSubProcessStart(scope: Scope, node: FlowNode): boolean {
+    return scope.graph
+      .allNodes()
+      .some(
+        (host) =>
+          host.triggeredByEvent === true &&
+          host.process?.flowNodes.some((inner) => inner.id === node.id) === true,
+      );
   }
 
   /**
@@ -502,6 +569,11 @@ export class WorkflowEngine {
         alternatives: choice.alternatives.map((alt) => ({ ...alt })),
       })),
       armedEvents: [...this.armedEvents],
+      firedConditionals: [...this.firedConditionals],
+      multiTriggers: [...this.multiTriggers].map(([key, received]): MultiTriggerState => ({
+        key,
+        received: [...received],
+      })),
       timers: [...this.timers.values()].map((timer) => ({ ...timer })),
       compensations: this.compensations.map((entry) => ({ ...entry })),
       incidents: this.incidentList().map((incident) => ({ ...incident })),
@@ -656,6 +728,10 @@ export class WorkflowEngine {
     }
     for (const [eventNodeId, tokenId] of state.armedEvents) {
       this.armedEvents.set(eventNodeId, tokenId);
+    }
+    for (const key of state.firedConditionals ?? []) this.firedConditionals.add(key);
+    for (const entry of state.multiTriggers ?? []) {
+      this.multiTriggers.set(entry.key, new Set(entry.received));
     }
 
     for (const timer of state.timers) {
@@ -865,6 +941,9 @@ export class WorkflowEngine {
 
     const token = this.waiting.get(entry.tokenId);
     if (!token || token.waiting !== 'catchEvent' || token.nodeId !== entry.nodeId) return false;
+    const node = token.scope.graph.node(token.nodeId);
+    // The timer is one trigger among several on a parallel multiple event.
+    if (node && !this.recordTrigger(node, `${node.id}:${token.id}`, 'timer')) return false;
     this.waiting.delete(token.id);
     token.waiting = undefined;
     this.completeNode(token);
@@ -1776,25 +1855,76 @@ export class WorkflowEngine {
   }
 
   /**
+   * Records one trigger against an event and answers whether it may now fire.
+   *
+   * A plain multiple event fires on the first trigger that reaches it. One
+   * marked `parallelMultiple` collects them instead and only opens once every
+   * declared trigger arrived, which is what the specification asks for;
+   * `gateKey` is what tells two activations of the same event apart.
+   */
+  private recordTrigger(node: FlowNode, gateKey: string, triggerKey: string): boolean {
+    if (node.parallelMultiple !== true) return true;
+    const required = requiredTriggerKeys(node);
+    if (required.length <= 1) return true;
+
+    const received = this.multiTriggers.get(gateKey) ?? new Set<string>();
+    received.add(triggerKey);
+    if (!required.every((key) => received.has(key))) {
+      this.multiTriggers.set(gateKey, received);
+      return false;
+    }
+    this.multiTriggers.delete(gateKey);
+    return true;
+  }
+
+  /**
+   * Whether a subscriber accepts this delivery. A broadcast signal reaches
+   * everyone; a correlated message only reaches the subscribers whose key
+   * resolves to the delivered value.
+   */
+  private correlates(node: FlowNode, scope: Scope, correlation: Correlation | undefined): boolean {
+    if (!correlation || !node.correlationKey) return true;
+    const value = this.evaluate(node.correlationKey, this.mergedVariables(scope));
+    return sameCorrelationKey(value, correlation.key);
+  }
+
+  /**
+   * Whether a delivered signal opens this event. Addressing it by its own id
+   * fires it outright: that names the event, not one of its triggers.
+   */
+  private signalOpens(node: FlowNode, gateKey: string, nameOrId: string): boolean {
+    if (node.id === nameOrId) {
+      this.multiTriggers.delete(gateKey);
+      return true;
+    }
+    return this.recordTrigger(node, gateKey, triggerKeyFor(node, nameOrId));
+  }
+
+  /**
    * Delivers a trigger to **every** subscriber that matches, as the
    * specification requires of a signal: parked catch events, armed
    * event-based gateway alternatives, boundary events and event subprocesses.
    */
-  private deliverSignal(nameOrId: string): boolean {
+  private deliverSignal(nameOrId: string, correlation?: Correlation): boolean {
+    // A trigger absorbed by a parallel multiple event that is still short of
+    // the rest was delivered too: it just did not move anything yet.
     let delivered = false;
 
     // 1. Parked catch events and receive tasks (by node id or event reference).
-    const parked = [...this.waiting.values()].filter((token) => {
-      if (token.waiting !== 'catchEvent' && token.waiting !== 'receiveTask') return false;
+    const parked: RuntimeToken[] = [];
+    for (const token of this.waiting.values()) {
+      if (token.waiting !== 'catchEvent' && token.waiting !== 'receiveTask') continue;
       const node = token.scope.graph.node(token.nodeId);
-      return node ? matchesTrigger(node, nameOrId) : false;
-    });
+      if (!node || !matchesTrigger(node, nameOrId)) continue;
+      if (!this.correlates(node, token.scope, correlation)) continue;
+      delivered = true;
+      if (this.signalOpens(node, `${node.id}:${token.id}`, nameOrId)) parked.push(token);
+    }
     for (const token of parked) {
       this.waiting.delete(token.id);
       token.waiting = undefined;
       this.completeNode(token);
       this.leaveViaOutgoing(token);
-      delivered = true;
     }
 
     // 2. Event-based gateway alternatives.
@@ -1803,15 +1933,25 @@ export class WorkflowEngine {
       if (!choice) continue;
       const eventNode = choice.token.scope.graph.node(eventNodeId);
       if (!eventNode || !matchesTrigger(eventNode, nameOrId)) continue;
+      if (!this.correlates(eventNode, choice.token.scope, correlation)) continue;
       this.resolveEventChoice(choice, eventNodeId);
       delivered = true;
     }
 
     // 3. Boundary events on active/waiting/suspended activities.
-    if (this.fireBoundaryBySignal(nameOrId)) delivered = true;
+    if (this.fireBoundaryBySignal(nameOrId, correlation)) delivered = true;
 
     // 4. Event subprocesses listening for this trigger.
-    if (this.startEventSubProcesses((start) => matchesTrigger(start, nameOrId))) delivered = true;
+    if (
+      this.startEventSubProcesses(
+        (start, scope) =>
+          matchesTrigger(start, nameOrId) &&
+          this.correlates(start, scope, correlation) &&
+          this.signalOpens(start, `${start.id}:${scope.id}`, nameOrId),
+      )
+    ) {
+      delivered = true;
+    }
 
     return delivered;
   }
@@ -1821,7 +1961,7 @@ export class WorkflowEngine {
    * one cancels the work of the scope that declares it; a non-interrupting one
    * runs alongside it.
    */
-  private startEventSubProcesses(matches: (start: FlowNode) => boolean): boolean {
+  private startEventSubProcesses(matches: (start: FlowNode, host: Scope) => boolean): boolean {
     let started = false;
     for (const scope of [...this.scopes]) {
       // Loop instance scopes share their parent's graph: only look once.
@@ -1836,7 +1976,7 @@ export class WorkflowEngine {
         const graph = new ProcessGraph(node.process);
         const start = graph
           .allNodes()
-          .find((candidate) => candidate.kind === 'startEvent' && matches(candidate));
+          .find((candidate) => candidate.kind === 'startEvent' && matches(candidate, scope));
         if (!start) continue;
         this.launchEventSubProcess(scope, node, graph, start);
         started = true;
@@ -1878,15 +2018,22 @@ export class WorkflowEngine {
     this.leaveViaOutgoing(chosen);
   }
 
-  private fireBoundaryBySignal(nameOrId: string): boolean {
+  /** Reports whether any boundary event took the trigger, fired or not. */
+  private fireBoundaryBySignal(nameOrId: string, correlation?: Correlation): boolean {
+    let delivered = false;
     for (const scope of this.scopes) {
       for (const node of scope.graph.allNodes()) {
         if (node.kind !== 'boundaryEvent' || !node.attachedToRef) continue;
-        if (node.id !== nameOrId && node.event?.reference !== nameOrId) continue;
+        if (node.id !== nameOrId && !detailsOf(node).some((d) => d.reference === nameOrId)) {
+          continue;
+        }
+        if (!this.correlates(node, scope, correlation)) continue;
+        delivered = true;
+        if (!this.signalOpens(node, `${node.id}:${scope.id}`, nameOrId)) continue;
         if (this.fireBoundary(scope, node)) return true;
       }
     }
-    return false;
+    return delivered;
   }
 
   /**
@@ -2242,6 +2389,21 @@ function detailsOf(node: FlowNode): EventDetail[] {
   return node.events ?? (node.event ? [node.event] : []);
 }
 
+/**
+ * The trigger keys a `parallelMultiple` event waits for: one per declared
+ * definition. A definition without a reference (a timer, a conditional) is
+ * identified by its kind, which is as far apart as two of them can be told.
+ */
+function requiredTriggerKeys(node: FlowNode): string[] {
+  return [...new Set(detailsOf(node).map((detail) => detail.reference ?? detail.kind))];
+}
+
+/** Which of the node's declared triggers a delivered name satisfies. */
+function triggerKeyFor(node: FlowNode, nameOrId: string): string {
+  const detail = detailsOf(node).find((candidate) => candidate.reference === nameOrId);
+  return detail ? (detail.reference ?? detail.kind) : nameOrId;
+}
+
 /** A trigger matches a node by its id, its message, or any event reference. */
 function matchesTrigger(node: FlowNode, nameOrId: string): boolean {
   return (
@@ -2254,6 +2416,18 @@ function matchesTrigger(node: FlowNode, nameOrId: string): boolean {
 /** First definition of a given kind, when the node declares one. */
 function detailOfKind(node: FlowNode, kind: EventDefinitionKind): EventDetail | undefined {
   return detailsOf(node).find((detail) => detail.kind === kind);
+}
+
+/**
+ * Whether two correlation keys identify the same instance. Compared by value,
+ * with a textual fallback: a key that travelled through a URL or a JSON body
+ * arrives as text, and `"42"` names the same order as `42`.
+ */
+function sameCorrelationKey(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a === null || b === null || a === undefined || b === undefined) return false;
+  if (typeof a === 'object' || typeof b === 'object') return false;
+  return String(a) === String(b);
 }
 
 /** Timers are unique per (token, timer node) pair. */

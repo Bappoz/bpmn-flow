@@ -1,16 +1,18 @@
 import { BpmnModdle } from 'bpmn-moddle';
 import { BpmnParseError } from '../errors.js';
-import type { ElementKind, EventDefinitionKind } from '../model/kinds.js';
+import type { DataElementKind, ElementKind, EventDefinitionKind } from '../model/kinds.js';
 import {
   EVENT_KINDS,
   GATEWAY_KINDS,
   SUBPROCESS_KINDS,
   TASK_KINDS,
+  isDataElementKind,
   isEventKind,
 } from '../model/kinds.js';
 import type {
   Association,
   BpmnModel,
+  DataElement,
   DataMapping,
   EventDetail,
   FlowNode,
@@ -19,11 +21,13 @@ import type {
   Participant,
   ProcessModel,
   SequenceFlow,
+  UnsupportedElement,
 } from '../model/types.js';
 import type {
   MdDataAssociation,
   MdElement,
   MdEventDefinition,
+  MdExtensionElements,
   MdLane,
   MdLoopCharacteristics,
   MdResourceRole,
@@ -43,6 +47,24 @@ function toElementKind($type: string): ElementKind | null {
   return ELEMENT_KINDS.has(camel) ? (camel as ElementKind) : null;
 }
 
+/** `bpmn:DataObjectReference` -> `dataObjectReference`, or null if not data. */
+function toDataElementKind($type: string): DataElementKind | null {
+  const local = $type.replace(/^[^:]+:/, '');
+  const camel = local.charAt(0).toLowerCase() + local.slice(1);
+  return isDataElementKind(camel) ? camel : null;
+}
+
+/** One data declaration turned into a normalized {@link DataElement}. */
+function readDataElement(el: MdElement, kind: DataElementKind): DataElement | undefined {
+  if (!el.id) return undefined;
+  const data: DataElement = { id: el.id, kind };
+  if (el.name) data.name = el.name;
+  const ref = el.dataObjectRef?.id ?? el.dataStoreRef?.id;
+  if (ref) data.dataRef = ref;
+  if (el.isCollection) data.isCollection = true;
+  return data;
+}
+
 /** XSD element names that do not match the model's vocabulary. */
 const KIND_ALIASES: Record<string, EventDefinitionKind> = {
   // `bpmn:CompensateEventDefinition` is the compensation trigger.
@@ -54,6 +76,33 @@ function toEventDefinitionKind($type: string): EventDefinitionKind {
   const local = $type.replace(/^[^:]+:/, '').replace(/EventDefinition$/, '');
   const camel = local.charAt(0).toLowerCase() + local.slice(1);
   return KIND_ALIASES[camel] ?? (camel as EventDefinitionKind);
+}
+
+/**
+ * Correlation key declared under `extensionElements`, as BPMN tools write it:
+ * `<zeebe:subscription correlationKey="=pedidoId" />`. The leading `=` marks a
+ * FEEL expression in those tools and is not part of the expression itself.
+ */
+function readCorrelationKey(...sources: (MdExtensionElements | undefined)[]): string | undefined {
+  for (const source of sources) {
+    for (const value of source?.values ?? []) {
+      const key = value.correlationKey?.trim();
+      if (key) return key.startsWith('=') ? key.slice(1).trim() : key;
+    }
+  }
+  return undefined;
+}
+
+/** Every `extensionElements` a catch event can hang a correlation key on. */
+function correlationSources(el: MdElement): (MdExtensionElements | undefined)[] {
+  return [
+    el.messageRef?.extensionElements,
+    el.extensionElements,
+    ...(el.eventDefinitions ?? []).flatMap((def) => [
+      def.messageRef?.extensionElements,
+      def.extensionElements,
+    ]),
+  ];
 }
 
 /** One `bpmn:*EventDefinition` turned into a normalized detail. */
@@ -180,24 +229,51 @@ function readAssociations(artifacts: MdElement[] | undefined): Association[] {
 interface ScopeAccumulator {
   nodes: FlowNode[];
   flows: SequenceFlow[];
+  dataElements: DataElement[];
+  /** Everything in the scope the parser saw and does not model. */
+  unsupported: UnsupportedElement[];
+}
+
+/** `bpmn:IoSpecification` -> `ioSpecification`. */
+function localName($type: string): string {
+  const local = $type.replace(/^[^:]+:/, '');
+  return local.charAt(0).toLowerCase() + local.slice(1);
+}
+
+/** Records what an element declares but the parser does not read. */
+function noteUnmodelled(el: MdElement, into: UnsupportedElement[]): void {
+  if (el.ioSpecification) {
+    into.push({ type: 'ioSpecification', ...(el.id ? { ownerId: el.id } : {}) });
+  }
+  for (const subscription of el.correlationSubscriptions ?? []) {
+    into.push({
+      type: 'correlationSubscription',
+      ...(subscription.id ? { id: subscription.id } : {}),
+      ...(el.id ? { ownerId: el.id } : {}),
+    });
+  }
 }
 
 /** Recursively walks a process/subprocess scope into normalized model arrays. */
 function readScope(elements: MdElement[]): ScopeAccumulator {
   const nodes = new Map<string, FlowNode>();
   const flows: SequenceFlow[] = [];
+  const dataElements: DataElement[] = [];
+  const unsupported: UnsupportedElement[] = [];
 
   // First pass: flow nodes (so we can wire flows onto them afterwards).
   for (const el of elements) {
     const kind = toElementKind(el.$type);
     if (!kind || !el.id) continue;
 
+    noteUnmodelled(el, unsupported);
     const node: FlowNode = { id: el.id, kind, incoming: [], outgoing: [] };
     if (el.name) node.name = el.name;
     if (isEventKind(kind)) {
       const details = readEventDetails(el.eventDefinitions);
       node.event = details[0];
       node.events = details;
+      if (el.parallelMultiple === true && details.length > 1) node.parallelMultiple = true;
     }
     if (kind === 'boundaryEvent') {
       if (el.attachedToRef?.id) node.attachedToRef = el.attachedToRef.id;
@@ -212,6 +288,8 @@ function readScope(elements: MdElement[]): ScopeAccumulator {
     if (candidates.length > 0) node.candidates = candidates;
     const message = el.messageRef?.name ?? el.messageRef?.id;
     if (message) node.messageRef = message;
+    const correlationKey = readCorrelationKey(...correlationSources(el));
+    if (correlationKey) node.correlationKey = correlationKey;
     if (kind === 'adHocSubProcess') {
       if (el.completionCondition?.body) node.completionCondition = el.completionCondition.body;
       if (el.ordering?.toLowerCase() === 'sequential') node.sequential = true;
@@ -227,6 +305,7 @@ function readScope(elements: MdElement[]): ScopeAccumulator {
     if (el.isForCompensation) node.isForCompensation = true;
     if (el.flowElements && el.flowElements.length > 0) {
       const inner = readScope(el.flowElements);
+      unsupported.push(...inner.unsupported);
       const associations = readAssociations(el.artifacts);
       node.process = {
         id: el.id,
@@ -234,6 +313,7 @@ function readScope(elements: MdElement[]): ScopeAccumulator {
         flowNodes: inner.nodes,
         sequenceFlows: inner.flows,
         ...(associations.length > 0 ? { associations } : {}),
+        ...(inner.dataElements.length > 0 ? { dataElements: inner.dataElements } : {}),
       };
     }
     nodes.set(node.id, node);
@@ -243,7 +323,17 @@ function readScope(elements: MdElement[]): ScopeAccumulator {
   // themselves rather than trusting the optional node arrays.
   for (const el of elements) {
     if (toElementKind(el.$type) !== null) continue;
-    if (el.$type.endsWith(':SequenceFlow') && el.id && el.sourceRef?.id && el.targetRef?.id) {
+    const dataKind = toDataElementKind(el.$type);
+    if (dataKind) {
+      const data = readDataElement(el, dataKind);
+      if (data) dataElements.push(data);
+      continue;
+    }
+    if (!el.$type.endsWith(':SequenceFlow')) {
+      unsupported.push({ type: localName(el.$type), ...(el.id ? { id: el.id } : {}) });
+      continue;
+    }
+    if (el.id && el.sourceRef?.id && el.targetRef?.id) {
       const flow: SequenceFlow = {
         id: el.id,
         sourceRef: el.sourceRef.id,
@@ -265,11 +355,13 @@ function readScope(elements: MdElement[]): ScopeAccumulator {
     }
   }
 
-  return { nodes: [...nodes.values()], flows };
+  return { nodes: [...nodes.values()], flows, dataElements, unsupported };
 }
 
-function readProcess(el: MdElement): ProcessModel {
+function readProcess(el: MdElement, unsupported: UnsupportedElement[]): ProcessModel {
   const scope = readScope(el.flowElements ?? []);
+  noteUnmodelled(el, unsupported);
+  unsupported.push(...scope.unsupported);
 
   const lanes = new Map<string, string>();
   for (const laneSet of el.laneSets ?? []) readLaneAssignments(laneSet.lanes, lanes);
@@ -285,6 +377,7 @@ function readProcess(el: MdElement): ProcessModel {
     flowNodes: scope.nodes,
     sequenceFlows: scope.flows,
     ...(associations.length > 0 ? { associations } : {}),
+    ...(scope.dataElements.length > 0 ? { dataElements: scope.dataElements } : {}),
   };
   if (el.name) process.name = el.name;
   return process;
@@ -317,10 +410,15 @@ export async function parseBpmn(xml: string): Promise<BpmnModel> {
   const processes: ProcessModel[] = [];
   const participants: Participant[] = [];
   const messageFlows: MessageFlow[] = [];
+  const dataStores: DataElement[] = [];
+  const unsupported: UnsupportedElement[] = [];
 
   for (const root of roots) {
     if (root.$type.endsWith(':Process')) {
-      processes.push(readProcess(root));
+      processes.push(readProcess(root, unsupported));
+    } else if (root.$type.endsWith(':DataStore')) {
+      const store = readDataElement(root, 'dataStore');
+      if (store) dataStores.push(store);
     } else if (root.$type.endsWith(':Collaboration')) {
       for (const part of root.participants ?? []) {
         const participant: Participant = { id: part.id ?? '' };
@@ -335,6 +433,8 @@ export async function parseBpmn(xml: string): Promise<BpmnModel> {
         if (mf.targetRef?.id) messageFlow.targetRef = mf.targetRef.id;
         messageFlows.push(messageFlow);
       }
+    } else {
+      unsupported.push({ type: localName(root.$type), ...(root.id ? { id: root.id } : {}) });
     }
   }
 
@@ -347,6 +447,8 @@ export async function parseBpmn(xml: string): Promise<BpmnModel> {
     processes,
     participants,
     messageFlows,
+    dataStores,
+    unsupported,
   };
   if (definitions.name) model.name = definitions.name;
   return model;

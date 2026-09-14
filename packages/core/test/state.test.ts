@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { ENGINE_STATE_VERSION, parseBpmn, WorkflowEngine } from '../src/index.js';
 import type { EngineState, ProcessModel } from '../src/index.js';
-import { EVENT_BASED, LINEAR, PARALLEL_WAIT, SUBPROCESS_WAIT } from './fixtures.js';
+import {
+  CONDITIONAL_BOUNDARY,
+  EVENT_BASED,
+  LINEAR,
+  PARALLEL_WAIT,
+  SUBPROCESS_WAIT,
+} from './fixtures.js';
 
 async function process(xml: string): Promise<ProcessModel> {
   return (await parseBpmn(xml)).processes[0]!;
@@ -93,5 +99,20 @@ describe('engine state round-trip', () => {
       WorkflowEngine.restore(p, { ...state, version: ENGINE_STATE_VERSION + 1 }),
     ).toThrow(/state version/);
     expect(() => WorkflowEngine.restore(p, { ...state, processId: 'Other' })).toThrow(/process/);
+  });
+});
+
+describe('conditional boundary across a restart', () => {
+  it('does not fire again for an activation already fired', async () => {
+    const p = await process(CONDITIONAL_BOUNDARY);
+    const first = new WorkflowEngine(p, { variables: { urgente: true } });
+    const before = await first.start();
+    const entered = (snapshot: { history: { nodeId: string; event: string }[] }): number =>
+      snapshot.history.filter((e) => e.nodeId === 'Priorizar' && e.event === 'enter').length;
+    expect(entered(before)).toBe(1);
+
+    const second = WorkflowEngine.restore(p, persist(first));
+    const after = await second.resume();
+    expect(entered(after)).toBe(1);
   });
 });
