@@ -1,27 +1,30 @@
 import { BpmnExecutionError, BpmnValidationError } from '../errors.js';
 import { ProcessGraph } from '../model/graph.js';
 import { isActivityKind } from '../model/kinds.js';
-import type {
-  EventDetail,
-  FlowNode,
-  LoopCharacteristics,
-  ProcessModel,
-  SequenceFlow,
-} from '../model/types.js';
-import type { EventDefinitionKind } from '../model/kinds.js';
+import type { FlowNode, LoopCharacteristics, ProcessModel, SequenceFlow } from '../model/types.js';
 import { Emitter } from './emitter.js';
 import { evaluateCondition, evaluateExpression, type ExpressionMode } from './expression.js';
 import { BpmnError, HandlerRegistry, type TaskHandler } from './handlers.js';
 import {
   ENGINE_STATE_VERSION,
   type EngineState,
-  type MultiTriggerState,
   type IncidentState,
   type ScopeState,
-  type TokenState,
   type TimerState,
 } from './state.js';
-import { parseTimerCycle, resolveTimerDueAt } from './timers.js';
+import type { EventChoice, RuntimeToken, Scope } from './runtime.js';
+import { LoopRunner } from './loop-runner.js';
+import { ScopeTree } from './scopes.js';
+import { hydrateEngine, serializeEngine, type EngineRuntime } from './state-serializer.js';
+import { resolveTimerDueAt } from './timers.js';
+import { TimerScheduler } from './timer-scheduler.js';
+import {
+  detailOfKind,
+  detailsOf,
+  matchesTrigger,
+  requiredTriggerKeys,
+  triggerKeyFor,
+} from './triggers.js';
 import type {
   ActivityMetrics,
   EngineEvents,
@@ -35,76 +38,12 @@ import type {
   WaitReason,
 } from './types.js';
 
-interface Scope {
-  id: string;
-  graph: ProcessGraph;
-  /** Parent activity token suspended while this (sub)scope runs. */
-  parentToken?: RuntimeToken;
-  /** Scope that hosts this one; absent on the root scope. */
-  parentScopeId?: string;
-  /** Live reference to the hosting scope, used to resolve variables. */
-  parentScope?: Scope;
-  hostNodeId?: string;
-  /** Data local to this scope; reads fall through to the parent chain. */
-  variables: Record<string, unknown>;
-  /** Set on scopes created for one instance of a loop/multi-instance activity. */
-  loopId?: string;
-  /** Position of this instance in the loop, `0`-based. Set with `loopId`. */
-  loopIndex?: number;
-  /** Data-mapped scopes do not read the caller's variables. */
-  isolated?: boolean;
-  /** Ad-hoc subprocess: activities not started yet. */
-  adHocPending?: string[];
-  /** Ad-hoc subprocess: expression that ends it early. */
-  completionCondition?: string;
-  tokens: Set<RuntimeToken>;
-}
-
-interface RuntimeToken {
-  id: string;
-  nodeId: string;
-  scope: Scope;
-  viaFlowId?: string;
-  waiting?: WaitReason;
-  /** Set on the token running one instance of a loop activity. */
-  loopInstanceOf?: string;
-}
-
-/** Bookkeeping for an activity being repeated (multi-instance or loop). */
-interface LoopRun {
-  id: string;
-  nodeId: string;
-  /** Scope the repeated activity belongs to. */
-  scope: Scope;
-  /** Token suspended until every instance finishes. */
-  parentToken: RuntimeToken;
-  loop: LoopCharacteristics;
-  items?: unknown[];
-  total: number;
-  started: number;
-  completed: number;
-  /**
-   * Output of each finished instance, tagged with the instance it came from.
-   * Instances of a parallel run finish in any order, so the index is what keeps
-   * the aggregated collection aligned with the input collection.
-   */
-  results: { index: number; value: unknown }[];
-  instanceScopes: Set<Scope>;
-}
-
 /** A message delivery narrowed to the instance the key identifies. */
 interface Correlation {
   key: unknown;
 }
 
-interface EventChoice {
-  token: RuntimeToken;
-  alternatives: { eventNodeId: string; flowId: string }[];
-}
-
 const DEFAULT_MAX_STEPS = 100_000;
-/** Standard loops without `loopMaximum` still need a ceiling. */
-const DEFAULT_LOOP_MAXIMUM = 1_000;
 
 /**
  * Token-based BPMN execution engine.
@@ -120,13 +59,17 @@ export class WorkflowEngine {
   private readonly registry = new HandlerRegistry();
   private readonly rootGraph: ProcessGraph;
 
-  private readonly scopes: Scope[] = [];
+  private readonly scopeTree: ScopeTree;
+  /** The live scope list. Only {@link scopeTree} mutates it. */
+  private get scopes(): Scope[] {
+    return this.scopeTree.all();
+  }
   private readonly ready: RuntimeToken[] = [];
   private readonly waiting = new Map<string, RuntimeToken>();
   private readonly parallelBuffers = new Map<string, Map<string, number>>();
   private readonly inclusiveBuffers = new Map<string, RuntimeToken[]>();
   private readonly eventChoices = new Map<string, EventChoice>();
-  private readonly loops = new Map<string, LoopRun>();
+  private readonly loopRunner: LoopRunner;
   /** Completed activities that carry a compensation handler, in order. */
   private readonly compensations: { activityId: string; scopeId: string }[] = [];
   /** Activities whose handler failed, keyed by token id. */
@@ -135,8 +78,7 @@ export class WorkflowEngine {
   private readonly firedConditionals = new Set<string>();
   /** Triggers collected so far by each waiting `parallelMultiple` event. */
   private readonly multiTriggers = new Map<string, Set<string>>();
-  /** Pending timers keyed by `tokenId:nodeId`. */
-  private readonly timers = new Map<string, TimerState>();
+  private readonly timerScheduler: TimerScheduler;
   private readonly armedEvents = new Map<string, string>();
   private readonly completedNodes = new Set<string>();
   private readonly history: HistoryEntry[] = [];
@@ -146,8 +88,6 @@ export class WorkflowEngine {
   private readonly definitions = new Map<string, ProcessModel>();
   private status: ExecutionStatus = 'idle';
   private tokenSeq = 0;
-  private scopeSeq = 0;
-  private loopSeq = 0;
   private readonly now: () => number;
   private readonly maxSteps: number;
   private readonly mode: 'automation' | 'auto';
@@ -164,13 +104,30 @@ export class WorkflowEngine {
     }
     this.rootGraph = new ProcessGraph(process);
     this.initialVariables = { ...(options.variables ?? {}) };
+    this.scopeTree = new ScopeTree(this.initialVariables);
+    this.now = options.now ?? (() => Date.now());
+    this.timerScheduler = new TimerScheduler(this.now);
+    this.loopRunner = new LoopRunner(
+      {
+        evaluate: (expression, variables) => this.evaluate(expression, variables),
+        condition: (expression, variables) => this.condition(expression, variables),
+        fail: (error) => this.fail(error),
+        spawn: (scope, nodeId) => this.spawn(scope, nodeId),
+        discard: (token) => this.discard(token),
+        completeNode: (token, options) => this.completeNode(token, options),
+        leaveViaOutgoing: (token) => this.leaveViaOutgoing(token),
+        removeScope: (scope) => this.removeScope(scope),
+        emit: (event, payload) => this.emitter.emit(event, payload),
+      },
+      this.scopeTree,
+      this.timerScheduler,
+    );
     for (const callable of options.processes ?? []) {
       this.definitions.set(callable.id, callable);
     }
     this.maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
     this.mode = options.mode ?? 'automation';
     this.expressions = options.expressions ?? 'safe';
-    this.now = options.now ?? (() => Date.now());
   }
 
   /** Evaluates one of the diagram's expressions under the engine's mode. */
@@ -430,7 +387,7 @@ export class WorkflowEngine {
    * to decide when to call {@link tick} again.
    */
   dueTimers(): TimerState[] {
-    return [...this.timers.values()].sort((a, b) => a.dueAt - b.dueAt);
+    return this.timerScheduler.due();
   }
 
   /**
@@ -441,8 +398,7 @@ export class WorkflowEngine {
     const retries = this.incidentList()
       .map((incident) => incident.retryAt)
       .filter((at): at is number => at !== undefined);
-    const due = [...this.dueTimers().map((timer) => timer.dueAt), ...retries];
-    return due.length > 0 ? Math.min(...due) : undefined;
+    return this.timerScheduler.nextAt(...retries);
   }
 
   /**
@@ -453,7 +409,7 @@ export class WorkflowEngine {
     let fired = false;
     for (const entry of this.dueTimers()) {
       if (entry.dueAt > now) break;
-      if (!this.timers.has(timerKey(entry.tokenId, entry.nodeId))) continue;
+      if (!this.timerScheduler.has(entry)) continue;
       if (this.fireTimer(entry)) fired = true;
     }
     // Scheduled retries are due dates too.
@@ -506,89 +462,35 @@ export class WorkflowEngine {
    * restored engine.
    */
   getState(): EngineState {
-    const tokens = new Map<string, TokenState>();
-    const record = (token: RuntimeToken, placement: TokenState['placement']): void => {
-      tokens.set(token.id, {
-        id: token.id,
-        nodeId: token.nodeId,
-        scopeId: token.scope.id,
-        ...(token.viaFlowId ? { viaFlowId: token.viaFlowId } : {}),
-        ...(token.waiting ? { waiting: token.waiting } : {}),
-        ...(placement && placement !== 'active' ? { placement } : {}),
-        ...(token.loopInstanceOf ? { loopInstanceOf: token.loopInstanceOf } : {}),
-      });
-    };
-
-    for (const scope of this.scopes) {
-      for (const token of scope.tokens) record(token, 'active');
-      // Suspended parents live outside their scope's token set.
-      if (scope.parentToken) record(scope.parentToken, 'suspended');
-    }
-    for (const buffer of this.inclusiveBuffers.values()) {
-      for (const token of buffer) record(token, 'inclusiveJoin');
-    }
-    // A token repeating an activity is suspended outside every scope too.
-    for (const run of this.loops.values()) record(run.parentToken, 'suspended');
-
-    return {
-      version: ENGINE_STATE_VERSION,
+    return serializeEngine(this.runtime(), {
       processId: this.rootGraph.process.id,
       status: this.status,
       mode: this.mode,
       maxSteps: this.maxSteps,
       steps: this.steps,
-      variables: this.rootVariables(),
       tokenSeq: this.tokenSeq,
-      scopeSeq: this.scopeSeq,
-      loopSeq: this.loopSeq,
-      scopes: this.scopes.map((scope) => ({
-        id: scope.id,
-        ...(scope.parentScopeId ? { parentScopeId: scope.parentScopeId } : {}),
-        ...(scope.hostNodeId ? { hostNodeId: scope.hostNodeId } : {}),
-        ...(scope.parentToken ? { parentTokenId: scope.parentToken.id } : {}),
-        ...(scope.loopId ? { loopId: scope.loopId } : {}),
-        ...(scope.loopIndex !== undefined ? { loopIndex: scope.loopIndex } : {}),
-        ...(scope.isolated ? { isolated: true } : {}),
-        ...(scope.adHocPending ? { adHocPending: [...scope.adHocPending] } : {}),
-        variables: { ...scope.variables },
-      })),
-      tokens: [...tokens.values()],
-      ready: this.ready.map((token) => token.id),
-      completedNodes: [...this.completedNodes],
-      history: [...this.history],
-      parallelBuffers: [...this.parallelBuffers].map(([key, counts]) => ({
-        key,
-        counts: [...counts],
-      })),
-      inclusiveBuffers: [...this.inclusiveBuffers].map(([key, buffer]) => ({
-        key,
-        tokenIds: buffer.map((token) => token.id),
-      })),
-      eventChoices: [...this.eventChoices].map(([tokenId, choice]) => ({
-        tokenId,
-        alternatives: choice.alternatives.map((alt) => ({ ...alt })),
-      })),
-      armedEvents: [...this.armedEvents],
-      firedConditionals: [...this.firedConditionals],
-      multiTriggers: [...this.multiTriggers].map(([key, received]): MultiTriggerState => ({
-        key,
-        received: [...received],
-      })),
-      timers: [...this.timers.values()].map((timer) => ({ ...timer })),
-      compensations: this.compensations.map((entry) => ({ ...entry })),
-      incidents: this.incidentList().map((incident) => ({ ...incident })),
-      loops: [...this.loops.values()].map((run) => ({
-        id: run.id,
-        nodeId: run.nodeId,
-        scopeId: run.scope.id,
-        parentTokenId: run.parentToken.id,
-        ...(run.items ? { items: run.items } : {}),
-        total: run.total,
-        started: run.started,
-        completed: run.completed,
-        results: run.results.map((result) => ({ ...result })),
-        instanceScopeIds: [...run.instanceScopes].map((scope) => scope.id),
-      })),
+      openIncidents: this.incidentList(),
+    });
+  }
+
+  /** The live collections, as the serializer reads and rebuilds them. */
+  private runtime(): EngineRuntime {
+    return {
+      scopes: this.scopeTree,
+      timers: this.timerScheduler,
+      loops: this.loopRunner,
+      ready: this.ready,
+      waiting: this.waiting,
+      parallelBuffers: this.parallelBuffers,
+      inclusiveBuffers: this.inclusiveBuffers,
+      eventChoices: this.eventChoices,
+      armedEvents: this.armedEvents,
+      firedConditionals: this.firedConditionals,
+      multiTriggers: this.multiTriggers,
+      compensations: this.compensations,
+      incidents: this.incidents,
+      completedNodes: this.completedNodes,
+      history: this.history,
     };
   }
 
@@ -644,128 +546,9 @@ export class WorkflowEngine {
     this.status = state.status;
     this.steps = state.steps;
     this.tokenSeq = state.tokenSeq;
-    this.scopeSeq = state.scopeSeq;
-    this.loopSeq = state.loopSeq;
-    for (const nodeId of state.completedNodes) this.completedNodes.add(nodeId);
-    this.history.push(...state.history);
-
-    // Scopes come out in creation order, so a parent is always rebuilt first.
-    const scopesById = new Map<string, Scope>();
-    for (const stored of state.scopes) {
-      const parentScope = stored.parentScopeId ? scopesById.get(stored.parentScopeId) : undefined;
-      const scope: Scope = {
-        id: stored.id,
-        graph: this.graphForScope(stored, scopesById),
-        tokens: new Set(),
-        variables: { ...stored.variables },
-        ...(stored.parentScopeId ? { parentScopeId: stored.parentScopeId } : {}),
-        // An isolated scope keeps its own data: no variable chain to the caller.
-        ...(parentScope && !stored.isolated ? { parentScope } : {}),
-        ...(stored.hostNodeId ? { hostNodeId: stored.hostNodeId } : {}),
-        ...(stored.loopId ? { loopId: stored.loopId } : {}),
-        ...(stored.loopIndex !== undefined ? { loopIndex: stored.loopIndex } : {}),
-        ...(stored.isolated ? { isolated: true } : {}),
-        ...(stored.adHocPending ? { adHocPending: [...stored.adHocPending] } : {}),
-      };
-      // The completion condition lives on the host node, so it is re-derived.
-      const host =
-        parentScope && stored.hostNodeId ? parentScope.graph.node(stored.hostNodeId) : undefined;
-      if (host?.completionCondition) scope.completionCondition = host.completionCondition;
-      scopesById.set(scope.id, scope);
-      this.scopes.push(scope);
-    }
-
-    const tokensById = new Map<string, RuntimeToken>();
-    for (const stored of state.tokens) {
-      const scope = scopesById.get(stored.scopeId);
-      if (!scope) {
-        throw new BpmnValidationError(
-          `Token ${stored.id} references unknown scope ${stored.scopeId}.`,
-        );
-      }
-      const token: RuntimeToken = {
-        id: stored.id,
-        nodeId: stored.nodeId,
-        scope,
-        ...(stored.viaFlowId ? { viaFlowId: stored.viaFlowId } : {}),
-        ...(stored.waiting ? { waiting: stored.waiting } : {}),
-        ...(stored.loopInstanceOf ? { loopInstanceOf: stored.loopInstanceOf } : {}),
-      };
-      tokensById.set(token.id, token);
-      // Suspended parents and tokens buffered at a join sit outside the scope.
-      if ((stored.placement ?? 'active') === 'active') scope.tokens.add(token);
-      if (token.waiting) this.waiting.set(token.id, token);
-    }
-
-    for (const stored of state.scopes) {
-      if (!stored.parentTokenId) continue;
-      const parent = tokensById.get(stored.parentTokenId);
-      const scope = scopesById.get(stored.id);
-      if (parent && scope) scope.parentToken = parent;
-    }
-
-    for (const tokenId of state.ready) {
-      const token = tokensById.get(tokenId);
-      if (token) this.ready.push(token);
-    }
-
-    for (const buffer of state.parallelBuffers) {
-      this.parallelBuffers.set(buffer.key, new Map(buffer.counts));
-    }
-    for (const buffer of state.inclusiveBuffers) {
-      const restored = buffer.tokenIds
-        .map((id) => tokensById.get(id))
-        .filter((token): token is RuntimeToken => token !== undefined);
-      this.inclusiveBuffers.set(buffer.key, restored);
-    }
-    for (const choice of state.eventChoices) {
-      const token = tokensById.get(choice.tokenId);
-      if (!token) continue;
-      this.eventChoices.set(choice.tokenId, {
-        token,
-        alternatives: choice.alternatives.map((alt) => ({ ...alt })),
-      });
-    }
-    for (const [eventNodeId, tokenId] of state.armedEvents) {
-      this.armedEvents.set(eventNodeId, tokenId);
-    }
-    for (const key of state.firedConditionals ?? []) this.firedConditionals.add(key);
-    for (const entry of state.multiTriggers ?? []) {
-      this.multiTriggers.set(entry.key, new Set(entry.received));
-    }
-
-    for (const timer of state.timers) {
-      this.timers.set(timerKey(timer.tokenId, timer.nodeId), { ...timer });
-    }
-    for (const entry of state.compensations ?? []) this.compensations.push({ ...entry });
-    for (const incident of state.incidents ?? [])
-      this.incidents.set(incident.tokenId, { ...incident });
-
-    for (const stored of state.loops) {
-      const scope = scopesById.get(stored.scopeId);
-      const parentToken = tokensById.get(stored.parentTokenId);
-      const loop = scope?.graph.node(stored.nodeId)?.loop;
-      if (!scope || !parentToken || !loop) {
-        throw new BpmnValidationError(`Cannot restore loop ${stored.id} on node ${stored.nodeId}.`);
-      }
-      this.loops.set(stored.id, {
-        id: stored.id,
-        nodeId: stored.nodeId,
-        scope,
-        parentToken,
-        loop,
-        ...(stored.items ? { items: stored.items } : {}),
-        total: stored.total,
-        started: stored.started,
-        completed: stored.completed,
-        results: (stored.results ?? []).map((result) => ({ ...result })),
-        instanceScopes: new Set(
-          stored.instanceScopeIds
-            .map((id) => scopesById.get(id))
-            .filter((s): s is Scope => s !== undefined),
-        ),
-      });
-    }
+    hydrateEngine(this.runtime(), state, (stored, scopesById) =>
+      this.graphForScope(stored, scopesById),
+    );
   }
 
   /**
@@ -791,18 +574,7 @@ export class WorkflowEngine {
   // --- Scope & token plumbing -------------------------------------------
 
   private createScope(graph: ProcessGraph, parentToken?: RuntimeToken, hostNodeId?: string): Scope {
-    const scope: Scope = {
-      id: `scope-${this.scopeSeq++}`,
-      graph,
-      tokens: new Set(),
-      variables: {},
-      ...(parentToken
-        ? { parentToken, parentScope: parentToken.scope, parentScopeId: parentToken.scope.id }
-        : {}),
-      ...(hostNodeId ? { hostNodeId } : {}),
-    };
-    this.scopes.push(scope);
-    return scope;
+    return this.scopeTree.create(graph, parentToken, hostNodeId);
   }
 
   private spawn(scope: Scope, nodeId: string, viaFlowId?: string): RuntimeToken {
@@ -855,87 +627,34 @@ export class WorkflowEngine {
 
   // --- Timers ------------------------------------------------------------
 
-  /**
-   * Arms the timers a parked token is subject to: the timer catch event it sits
-   * on, plus any timer boundary event attached to the activity.
-   */
+  // Scheduling lives in TimerScheduler; firing stays here, because it moves
+  // tokens.
+
   private armTimers(token: RuntimeToken): void {
-    const node = token.scope.graph.node(token.nodeId);
-    if (!node) return;
-    const timer = detailOfKind(node, 'timer');
-    if (timer && node.kind !== 'boundaryEvent') {
-      this.armTimer(token, node, 'catch', timer.timer);
-    }
-    // A boundary event belongs to the activity as a whole, so a multi-instance
-    // activity arms it once (in startLoop), not once per instance.
-    if (!token.loopInstanceOf) this.armBoundaryTimers(token);
+    this.timerScheduler.armFor(token);
   }
 
-  /** Arms timer boundary events attached to the activity the token sits on. */
   private armBoundaryTimers(token: RuntimeToken): void {
-    for (const boundary of token.scope.graph.boundaryEvents(token.nodeId)) {
-      const timer = detailOfKind(boundary, 'timer');
-      if (!timer) continue;
-      this.armTimer(token, boundary, 'boundary', timer.timer);
-    }
-  }
-
-  private armTimer(
-    token: RuntimeToken,
-    node: FlowNode,
-    kind: TimerState['kind'],
-    definition: string | undefined,
-  ): void {
-    // Without a definition there is nothing to schedule: the event still works
-    // through an explicit signal.
-    if (!definition) return;
-    const dueAt = resolveTimerDueAt(definition, this.now());
-    if (dueAt === undefined) return;
-    const cycle = parseTimerCycle(definition);
-    this.timers.set(timerKey(token.id, node.id), {
-      tokenId: token.id,
-      nodeId: node.id,
-      scopeId: token.scope.id,
-      kind,
-      dueAt,
-      definition,
-      // A cycle keeps firing while the activity it guards is still running.
-      ...(cycle ? { repetitions: cycle.repetitions } : {}),
-    });
-  }
-
-  /** Schedules the next firing of a repeating boundary timer, if any is left. */
-  private rearmCycle(entry: TimerState, node: FlowNode): void {
-    const cycle = parseTimerCycle(entry.definition);
-    if (!cycle) return;
-    const remaining = entry.repetitions === null ? null : (entry.repetitions ?? 1) - 1;
-    if (remaining !== null && remaining <= 0) return;
-    const dueAt = resolveTimerDueAt(cycle.interval, this.now());
-    if (dueAt === undefined) return;
-    this.timers.set(timerKey(entry.tokenId, node.id), {
-      ...entry,
-      dueAt,
-      ...(remaining === null ? { repetitions: null } : { repetitions: remaining }),
-    });
+    this.timerScheduler.armBoundaries(token);
   }
 
   private clearTimersFor(tokenId: string): void {
-    for (const [key, entry] of this.timers) {
-      if (entry.tokenId === tokenId) this.timers.delete(key);
-    }
+    this.timerScheduler.clearFor(tokenId);
   }
 
   /** Resolves one due timer. Returns true when the execution moved. */
   private fireTimer(entry: TimerState): boolean {
-    this.timers.delete(timerKey(entry.tokenId, entry.nodeId));
+    this.timerScheduler.take(entry);
 
     if (entry.kind === 'boundary') {
-      const scope = this.scopes.find((s) => s.id === entry.scopeId);
+      const scope = this.scopeTree.byId(entry.scopeId);
       const boundary = scope?.graph.node(entry.nodeId);
       if (!scope || !boundary) return false;
       const fired = this.fireBoundary(scope, boundary);
       // A cyclic, non-interrupting boundary rearms for its next firing.
-      if (fired && boundary.cancelActivity === false) this.rearmCycle(entry, boundary);
+      if (fired && boundary.cancelActivity === false) {
+        this.timerScheduler.rearmCycle(entry, boundary);
+      }
       return fired;
     }
 
@@ -953,90 +672,30 @@ export class WorkflowEngine {
 
   // --- Variables ---------------------------------------------------------
 
-  /**
-   * Reads a variable walking the scope chain outwards: the innermost scope that
-   * defines it wins, so a multi-instance item shadows a process variable.
-   */
+  // Resolution lives in ScopeTree; these keep the engine's call sites short.
+
   private readVariable(scope: Scope | undefined, name: string): unknown {
-    for (let current = scope; current; current = current.parentScope) {
-      if (Object.hasOwn(current.variables, name)) return current.variables[name];
-    }
-    return undefined;
+    return this.scopeTree.read(scope, name);
   }
 
-  /**
-   * Writes to the scope that already defines the variable; otherwise to the
-   * process scope, matching the usual "process variable" expectation. Use
-   * `setLocal` in a handler to keep a value inside the current scope.
-   */
   private writeVariable(scope: Scope | undefined, name: string, value: unknown): void {
-    let outermost: Scope | undefined;
-    for (let current = scope; current; current = current.parentScope) {
-      if (Object.hasOwn(current.variables, name)) {
-        current.variables[name] = value;
-        return;
-      }
-      outermost = current;
-    }
-    // A new variable lands on the outermost scope the activity can see. For an
-    // isolated scope (data-mapped call activity) that is the scope itself, so
-    // its data never leaks into the caller.
-    const target = outermost ?? this.scopes[0];
-    if (target) target.variables[name] = value;
-    else this.initialVariables[name] = value;
+    this.scopeTree.write(scope, name, value);
   }
 
   private assignVariables(scope: Scope | undefined, values: Record<string, unknown>): void {
-    for (const [name, value] of Object.entries(values)) this.writeVariable(scope, name, value);
+    this.scopeTree.assign(scope, values);
   }
 
-  /** Flattened view of the scope chain, innermost value winning. */
   private mergedVariables(scope: Scope | undefined): Record<string, unknown> {
-    const chain: Scope[] = [];
-    for (let current = scope; current; current = current.parentScope) chain.unshift(current);
-    return Object.assign({}, ...chain.map((s) => s.variables)) as Record<string, unknown>;
+    return this.scopeTree.merged(scope);
   }
 
   private rootVariables(): Record<string, unknown> {
-    return { ...(this.scopes[0]?.variables ?? this.initialVariables) };
+    return this.scopeTree.rootVariables();
   }
 
-  /**
-   * Live view handed to handlers: reads resolve through the scope chain and
-   * writes go where {@link writeVariable} decides, so `ctx.variables.x = 1`
-   * keeps working as documented.
-   */
   private variableProxy(scope: Scope): Record<string, unknown> {
-    return new Proxy(
-      {},
-      {
-        get: (_target, key) =>
-          typeof key === 'string' ? this.readVariable(scope, key) : undefined,
-        set: (_target, key, value) => {
-          if (typeof key === 'string') this.writeVariable(scope, key, value);
-          return true;
-        },
-        has: (_target, key) =>
-          typeof key === 'string' && this.readVariable(scope, key) !== undefined,
-        ownKeys: () => Object.keys(this.mergedVariables(scope)),
-        getOwnPropertyDescriptor: (_target, key) => ({
-          value: typeof key === 'string' ? this.readVariable(scope, key) : undefined,
-          enumerable: true,
-          configurable: true,
-          writable: true,
-        }),
-        deleteProperty: (_target, key) => {
-          if (typeof key !== 'string') return true;
-          for (let current: Scope | undefined = scope; current; current = current.parentScope) {
-            if (Object.hasOwn(current.variables, key)) {
-              delete current.variables[key];
-              return true;
-            }
-          }
-          return true;
-        },
-      },
-    );
+    return this.scopeTree.proxy(scope);
   }
 
   // --- Run loop ----------------------------------------------------------
@@ -1353,7 +1012,7 @@ export class WorkflowEngine {
     const hostId = child.hostNodeId;
     const host = hostId ? parent?.scope.graph.node(hostId) : undefined;
     if (host && parent) this.applyDataOutput(host, child, parent.scope);
-    this.scopes.splice(this.scopes.indexOf(child), 1);
+    this.scopeTree.remove(child);
     if (!parent || !hostId) return;
     parent.scope.tokens.add(parent);
     this.emitter.emit('activity.end', { nodeId: hostId, tokenId: parent.id });
@@ -1430,208 +1089,22 @@ export class WorkflowEngine {
 
   // --- Multi-instance & loops -------------------------------------------
 
-  /** Expands an activity marked as multi-instance (or standard loop). */
+  // Repetition lives in LoopRunner; the engine only owns the tokens it moves.
+
   private startLoop(token: RuntimeToken, node: FlowNode, loop: LoopCharacteristics): void {
-    const scope = token.scope;
-    const variables = this.mergedVariables(scope);
-    let items: unknown[] | undefined;
-    let total: number;
-
-    if (loop.kind === 'multiInstance') {
-      if (loop.collection) {
-        const collection: unknown = this.readVariable(scope, loop.collection);
-        if (!isUnknownArray(collection)) {
-          this.fail(
-            new BpmnExecutionError(
-              `Multi-instance collection "${loop.collection}" of ${node.id} is not an array.`,
-            ),
-          );
-          return;
-        }
-        items = [...collection];
-        total = items.length;
-      } else if (loop.cardinality) {
-        const value = Number(this.evaluate(loop.cardinality, variables));
-        if (!Number.isFinite(value) || value < 0) {
-          this.fail(
-            new BpmnExecutionError(`Multi-instance cardinality of ${node.id} is not a number.`),
-          );
-          return;
-        }
-        total = Math.floor(value);
-      } else {
-        this.fail(
-          new BpmnExecutionError(
-            `Multi-instance activity ${node.id} needs a cardinality or a collection.`,
-          ),
-        );
-        return;
-      }
-    } else {
-      total = loop.maximum ?? DEFAULT_LOOP_MAXIMUM;
-      // `testBefore` means the condition guards the very first iteration too.
-      if (loop.testBefore && loop.loopCondition && !this.condition(loop.loopCondition, variables))
-        total = 0;
-    }
-
-    if (total === 0) {
-      // Zero instances: the activity is simply skipped, per the specification.
-      this.completeNode(token);
-      this.leaveViaOutgoing(token);
-      return;
-    }
-
-    scope.tokens.delete(token); // suspend until every instance is done
-    this.armBoundaryTimers(token);
-    const run: LoopRun = {
-      id: `loop-${this.loopSeq++}`,
-      nodeId: node.id,
-      scope,
-      parentToken: token,
-      loop,
-      ...(items ? { items } : {}),
-      total,
-      started: 0,
-      completed: 0,
-      results: [],
-      instanceScopes: new Set(),
-    };
-    this.loops.set(run.id, run);
-    if (loop.outputCollection) this.writeVariable(scope, loop.outputCollection, []);
-    this.emitter.emit('activity.start', { nodeId: node.id, tokenId: token.id });
-
-    if (loop.sequential) {
-      this.startLoopInstance(run);
-      return;
-    }
-    for (let index = 0; index < total; index++) this.startLoopInstance(run);
+    this.loopRunner.start(token, node, loop);
   }
 
-  /** Creates one instance scope (with its own item/counter) and its token. */
-  private startLoopInstance(run: LoopRun): void {
-    const index = run.started++;
-    const variables: Record<string, unknown> = { loopCounter: index };
-    if (run.loop.elementVariable && run.items) {
-      variables[run.loop.elementVariable] = run.items[index];
-    }
-    // Declaring the output variable locally keeps each instance's result inside
-    // its own scope, so a handler can just `set` it and the loop collects it.
-    if (run.loop.outputElement) variables[run.loop.outputElement] = undefined;
-    const scope: Scope = {
-      id: `scope-${this.scopeSeq++}`,
-      graph: run.scope.graph,
-      parentScope: run.scope,
-      parentScopeId: run.scope.id,
-      hostNodeId: run.nodeId,
-      loopId: run.id,
-      loopIndex: index,
-      variables,
-      tokens: new Set(),
-    };
-    this.scopes.push(scope);
-    run.instanceScopes.add(scope);
-    const token = this.spawn(scope, run.nodeId);
-    token.loopInstanceOf = run.id;
-  }
-
-  /** One instance reached the end of the activity. */
   private finishLoopInstance(token: RuntimeToken): void {
-    const run = token.loopInstanceOf ? this.loops.get(token.loopInstanceOf) : undefined;
-    const scope = token.scope;
-    this.discard(token);
-    if (!run) return;
-
-    this.collectLoopOutput(run, scope);
-    run.instanceScopes.delete(scope);
-    this.removeScope(scope);
-    run.completed++;
-
-    const variables = this.mergedVariables(run.scope);
-    if (run.loop.kind === 'multiInstance') {
-      if (run.loop.completionCondition && this.condition(run.loop.completionCondition, variables))
-        return this.finishLoop(run);
-      if (run.loop.sequential) {
-        if (run.started < run.total) return this.startLoopInstance(run);
-        return this.finishLoop(run);
-      }
-      if (run.completed >= run.total) this.finishLoop(run);
-      return;
-    }
-
-    const repeat =
-      run.started < run.total &&
-      (!run.loop.loopCondition || this.condition(run.loop.loopCondition, variables));
-    if (repeat) this.startLoopInstance(run);
-    else this.finishLoop(run);
+    this.loopRunner.finishInstance(token);
   }
 
-  /**
-   * Aggregates the instance's output variable into the output collection.
-   *
-   * The specification asks for positional correspondence between input and
-   * output collection: the result of the instance that ran over `itens[2]`
-   * belongs at `resultados[2]`. Appending on completion breaks that as soon as
-   * a parallel run finishes out of order, so the result is stored under the
-   * instance index and the whole collection is rebuilt in index order.
-   *
-   * The rebuilt array is dense: an instance cancelled by a completion condition
-   * never contributes, instead of leaving a hole (an instance that produced
-   * `undefined` still occupies its slot).
-   */
-  private collectLoopOutput(run: LoopRun, instanceScope: Scope): void {
-    const { outputCollection, outputElement } = run.loop;
-    if (!outputCollection || !outputElement) return;
-    if (!Array.isArray(this.readVariable(run.scope, outputCollection))) return;
-    run.results.push({
-      index: instanceScope.loopIndex ?? run.results.length,
-      value: this.readVariable(instanceScope, outputElement),
-    });
-    const ordered = [...run.results].sort((a, b) => a.index - b.index);
-    this.writeVariable(
-      run.scope,
-      outputCollection,
-      ordered.map((result) => result.value),
-    );
-  }
-
-  /** Every instance is done (or was cancelled): the activity itself completes. */
-  private finishLoop(run: LoopRun): void {
-    this.loops.delete(run.id);
-    for (const scope of [...run.instanceScopes]) {
-      for (const token of [...scope.tokens]) this.discard(token);
-      this.removeScope(scope);
-    }
-    run.instanceScopes.clear();
-
-    const parent = run.parentToken;
-    parent.scope.tokens.add(parent);
-    this.emitter.emit('activity.end', { nodeId: run.nodeId, tokenId: parent.id });
-    this.completeNode(parent, { history: false });
-    this.leaveViaOutgoing(parent);
-  }
-
-  /** Discards every instance of a repeated activity and forgets the run. */
-  private cancelLoop(run: LoopRun): void {
-    this.loops.delete(run.id);
-    for (const scope of [...run.instanceScopes]) {
-      for (const token of [...scope.tokens]) this.discard(token);
-      this.removeScope(scope);
-    }
-    run.instanceScopes.clear();
-  }
-
-  /** Cancels every repeated activity living in the given scope. */
   private cancelLoopsOf(scope: Scope): void {
-    for (const run of [...this.loops.values()]) {
-      if (run.scope !== scope) continue;
-      this.cancelLoop(run);
-      this.discard(run.parentToken);
-    }
+    this.loopRunner.cancelIn(scope);
   }
 
   private removeScope(scope: Scope): void {
-    const index = this.scopes.indexOf(scope);
-    if (index >= 0) this.scopes.splice(index, 1);
+    this.scopeTree.remove(scope);
     // Nothing left to compensate in a scope that no longer exists.
     for (let i = this.compensations.length - 1; i >= 0; i--) {
       if (this.compensations[i]!.scopeId === scope.id) this.compensations.splice(i, 1);
@@ -2116,12 +1589,10 @@ export class WorkflowEngine {
     const interrupting = boundary.cancelActivity !== false;
 
     // Host is a repeated activity: the event applies to every instance at once.
-    const run = [...this.loops.values()].find(
-      (candidate) => candidate.nodeId === hostId && candidate.scope === scope,
-    );
+    const run = this.loopRunner.find(hostId, scope);
     if (run) {
       if (interrupting) {
-        this.cancelLoop(run);
+        this.loopRunner.cancel(run);
         this.discard(run.parentToken);
       }
       this.emitBoundary(scope, boundary);
@@ -2134,7 +1605,7 @@ export class WorkflowEngine {
       if (interrupting) {
         this.cancelLoopsOf(childScope);
         for (const t of [...childScope.tokens]) this.discard(t);
-        this.scopes.splice(this.scopes.indexOf(childScope), 1);
+        this.scopeTree.remove(childScope);
         const parent = childScope.parentToken!;
         this.discard(parent);
       }
@@ -2384,45 +1855,6 @@ function matchesFilter(task: PendingTask, filter: TaskFilter): boolean {
   return true;
 }
 
-/** Every event definition declared on a node (one `none` when it declares none). */
-function detailsOf(node: FlowNode): EventDetail[] {
-  return node.events ?? (node.event ? [node.event] : []);
-}
-
-/**
- * The trigger keys a `parallelMultiple` event waits for: one per declared
- * definition. A definition without a reference (a timer, a conditional) is
- * identified by its kind, which is as far apart as two of them can be told.
- */
-function requiredTriggerKeys(node: FlowNode): string[] {
-  return [...new Set(detailsOf(node).map((detail) => detail.reference ?? detail.kind))];
-}
-
-/** Which of the node's declared triggers a delivered name satisfies. */
-function triggerKeyFor(node: FlowNode, nameOrId: string): string {
-  const detail = detailsOf(node).find((candidate) => candidate.reference === nameOrId);
-  return detail ? (detail.reference ?? detail.kind) : nameOrId;
-}
-
-/** A trigger matches a node by its id, its message, or any event reference. */
-function matchesTrigger(node: FlowNode, nameOrId: string): boolean {
-  return (
-    node.id === nameOrId ||
-    node.messageRef === nameOrId ||
-    detailsOf(node).some((detail) => detail.reference === nameOrId)
-  );
-}
-
-/** First definition of a given kind, when the node declares one. */
-function detailOfKind(node: FlowNode, kind: EventDefinitionKind): EventDetail | undefined {
-  return detailsOf(node).find((detail) => detail.kind === kind);
-}
-
-/** `Array.isArray` narrows to `any[]`; the engine never wants `any`. */
-function isUnknownArray(value: unknown): value is unknown[] {
-  return Array.isArray(value);
-}
-
 /**
  * Whether two correlation keys identify the same instance. Compared by value,
  * with a textual fallback: a key that travelled through a URL or a JSON body
@@ -2437,9 +1869,4 @@ function sameCorrelationKey(a: unknown, b: unknown): boolean {
 function isKeyLiteral(value: unknown): value is string | number | bigint | boolean {
   const type = typeof value;
   return type === 'string' || type === 'number' || type === 'bigint' || type === 'boolean';
-}
-
-/** Timers are unique per (token, timer node) pair. */
-function timerKey(tokenId: string, nodeId: string): string {
-  return `${tokenId}:${nodeId}`;
 }

@@ -29,9 +29,13 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "dev": "npm run dev --workspace @bpmn-flow/playground",
+    "changeset": "changeset",
+    "version-packages": "changeset version && npm install --package-lock-only",
+    "release": "npm run build && changeset publish",
     "release:dry": "npm publish --workspaces --dry-run --if-present"
   },
   "devDependencies": {
+    "@changesets/cli": "3.0.2",
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.0.0",
     "@vitest/coverage-v8": "^4.1.11",

@@ -1,6 +1,9 @@
 import { validateBpmn, type ValidationResult } from '@bpmn-flow/core';
 import { ensureLayout } from '@bpmn-flow/viewer';
 import BpmnModeler from 'bpmn-js/lib/Modeler';
+import 'bpmn-js/dist/assets/diagram-js.css';
+import 'bpmn-js/dist/assets/bpmn-js.css';
+import 'bpmn-js/dist/assets/bpmn-font/css/bpmn.css';
 
 /** Blank diagram with a single start event, ready to be extended. */
 const BLANK = `<?xml version="1.0" encoding="UTF-8"?>

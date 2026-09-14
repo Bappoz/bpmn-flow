@@ -14,9 +14,17 @@ export default defineConfig({
         // argv/process wiring around the tested command functions.
         '**/src/bin.ts',
         'packages/server/src/index.ts',
-        // Browser wiring: DOM, file inputs and a bpmn-js modeler. The logic
-        // worth testing was extracted to apps/playground/src/guided.ts.
+        // Browser wiring: DOM nodes, file inputs, fetch and a bpmn-js modeler.
+        // The logic worth testing was extracted to apps/playground/src/guided.ts,
+        // which is the one playground module that stays in.
         'apps/playground/src/main.ts',
+        'apps/playground/src/elements.ts',
+        'apps/playground/src/samples.ts',
+        'apps/playground/src/panel.ts',
+        'apps/playground/src/run-mode.ts',
+        'apps/playground/src/guided-run.ts',
+        'apps/playground/src/edit-mode.ts',
+        'apps/playground/src/diagram-view.ts',
         'apps/playground/src/editor.ts',
         'apps/playground/src/api.ts',
         'apps/playground/src/prompt.ts',
