@@ -16,14 +16,11 @@ import {
   type VariableUsage,
   type ValidationResult,
 } from '@bpmn-flow/core';
-import { BpmnFlowViewer, ExecutionReplay } from '@bpmn-flow/viewer';
-import '@bpmn-flow/viewer/styles.css';
-import 'bpmn-js/dist/assets/diagram-js.css';
-import 'bpmn-js/dist/assets/bpmn-js.css';
-import 'bpmn-js/dist/assets/bpmn-font/css/bpmn.css';
+import type { BpmnFlowViewer } from '@bpmn-flow/viewer';
+import type * as DiagramView from './diagram-view.js';
 import './style.css';
 import { fetchSampleNames, fetchSampleXml, saveSample } from './api.js';
-import { BpmnEditor } from './editor.js';
+import type { BpmnEditor } from './editor.js';
 import { StepPrompt, type StepAnswer } from './prompt.js';
 import { flattenNodes, gatewayRequest, labelOf, nextStep, type GuidedContext } from './guided.js';
 
@@ -72,7 +69,18 @@ const els = {
   log: $<HTMLOListElement>('log'),
 };
 
-const viewer = new BpmnFlowViewer({ container: els.diagram });
+/**
+ * O viewer e o editor entram por `import()`: os dois trazem uma biblioteca de
+ * renderização inteira, e o editor pode nunca ser aberto.
+ */
+let viewerModule: typeof DiagramView | undefined;
+let viewer: BpmnFlowViewer | undefined;
+
+async function ensureViewer(): Promise<BpmnFlowViewer> {
+  viewerModule ??= await import('./diagram-view.js');
+  viewer ??= new viewerModule.BpmnFlowViewer({ container: els.diagram });
+  return viewer;
+}
 
 let currentXml = '';
 let currentModel: BpmnModel | undefined;
@@ -154,7 +162,7 @@ async function loadDiagram(xml: string): Promise<void> {
   currentModel = await parseBpmn(xml);
   nodesById = flattenNodes(currentModel);
   renderVariableHints();
-  await viewer.load(xml);
+  await (await ensureViewer()).load(xml);
   teardownEngine();
   stopGuided();
   metricsShown = false;
@@ -190,7 +198,7 @@ function newEngine(mode: EngineMode, variables: Record<string, unknown>): Workfl
   const process = mainProcess();
   if (!process) throw new Error('Nenhum processo executável no diagrama.');
   const created = new WorkflowEngine(process, { mode, variables, decide: onGatewayDecision });
-  unbindViewer = viewer.bindEngine(created);
+  unbindViewer = viewer?.bindEngine(created);
   created.on('node.enter', (e) => log(`Entrou: ${label(e.nodeId)}`));
   created.on('wait', (e) => log(`Aguardando: ${label(e.nodeId)} (${e.reason})`));
   created.on('process.end', (e) => log(`Processo ${e.status}.`));
@@ -198,7 +206,7 @@ function newEngine(mode: EngineMode, variables: Record<string, unknown>): Workfl
 }
 
 function render(snapshot: ExecutionSnapshot): void {
-  viewer.applySnapshot(snapshot);
+  viewer?.applySnapshot(snapshot);
   els.status.textContent = `Status: ${snapshot.status} - ${snapshot.tokens.length} token(s) ativos, ${snapshot.completedNodes.length} nó(s) concluídos.`;
   els.variablesView.textContent = JSON.stringify(snapshot.variables, null, 2);
   renderActions(snapshot.tokens);
@@ -380,7 +388,7 @@ async function guidedRun(): Promise<void> {
     // Enquanto conduz, quem pinta é a animação — não os eventos da engine.
     unbindViewer?.();
     unbindViewer = undefined;
-    viewer.clear();
+    viewer?.clear();
 
     shownSteps = 0;
     answeredGateways.clear();
@@ -407,7 +415,9 @@ async function guidedRun(): Promise<void> {
 
 /** Percorre o histórico do passo `from` até o fim; devolve quantos já foram. */
 function animateFrom(history: HistoryEntry[], from: number): Promise<number> {
-  const replay = new ExecutionReplay(history);
+  // Só há o que animar depois de um diagrama carregado, que é o que traz o chunk.
+  if (!viewerModule) return Promise.resolve(from);
+  const replay = new viewerModule.ExecutionReplay(history);
   if (replay.length <= from) return Promise.resolve(from);
   replay.seek(from - 1);
   return new Promise<number>((resolve) => {
@@ -419,7 +429,7 @@ function animateFrom(history: HistoryEntry[], from: number): Promise<number> {
         resolve(replay.position + 1);
         return;
       }
-      viewer.applyReplayFrame(frame);
+      viewer?.applyReplayFrame(frame);
       els.status.textContent = `Passo ${frame.index + 1}/${replay.length}: ${label(
         frame.entry.nodeId,
       )} (${frame.entry.event})`;
@@ -443,7 +453,7 @@ function finishGuided(): void {
   prompt.close();
   els.replay.textContent = 'Run';
   if (!engine) return;
-  unbindViewer ??= viewer.bindEngine(engine);
+  unbindViewer ??= viewer?.bindEngine(engine);
   render(engine.snapshot());
 }
 
@@ -489,8 +499,8 @@ async function onGatewayDecision(decision: GatewayDecision): Promise<string | un
 function toggleMetrics(): void {
   if (!engine) return;
   const metrics = engine.metrics();
-  if (metricsShown) viewer.clearMetrics(metrics);
-  else viewer.showMetrics(metrics);
+  if (metricsShown) viewer?.clearMetrics(metrics);
+  else viewer?.showMetrics(metrics);
   metricsShown = !metricsShown;
 }
 
@@ -548,7 +558,10 @@ function fail(error: unknown): void {
 // --- Editor (edit mode) ------------------------------------------------
 
 async function ensureEditor(): Promise<BpmnEditor> {
-  editor ??= new BpmnEditor(els.editorEl);
+  if (!editor) {
+    const { BpmnEditor } = await import('./editor.js');
+    editor = new BpmnEditor(els.editorEl);
+  }
   // Reabre sempre que o diagrama do modo executar mudou desde a ultima abertura,
   // para o editor nunca mostrar um diagrama antigo.
   if (currentXml && currentXml !== editorXml) {
@@ -654,7 +667,7 @@ els.autorun.addEventListener('click', () => void autorun());
 els.reset.addEventListener('click', () => {
   if (currentXml) void loadDiagram(currentXml);
 });
-els.fit.addEventListener('click', () => viewer.fit());
+els.fit.addEventListener('click', () => viewer?.fit());
 els.replay.addEventListener('click', () => void guidedRun());
 els.panelToggle.addEventListener('click', () => togglePanel());
 els.metrics.addEventListener('click', () => toggleMetrics());
@@ -693,7 +706,7 @@ function togglePanel(collapsed = !els.appMain.classList.contains('panel-collapse
   localStorage.setItem(PANEL_KEY, String(collapsed));
   // A área do canvas mudou de tamanho: reenquadra depois da transição.
   window.setTimeout(() => {
-    if (els.editorEl.classList.contains('hidden')) viewer.fit();
+    if (els.editorEl.classList.contains('hidden')) viewer?.fit();
     else void ensureEditor().then((active) => active.fit());
   }, 220);
 }

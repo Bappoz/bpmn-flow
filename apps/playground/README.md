@@ -73,3 +73,21 @@ Limitações conhecidas do modo editar: o `bpmn-js` exige interchange de diagram
 (DI), então diagramas sem layout — como `processo-gestao-projeto.bpmn` — não
 abrem no editor, e o editor mantém em memória o primeiro diagrama aberto na
 sessão.
+
+## Como o bundle é dividido
+
+As duas bibliotecas de renderização são a maior parte do peso, e nenhuma das
+duas precisa estar no primeiro download:
+
+| Chunk                   | Conteúdo                                     | Quando é baixado                     |
+| ----------------------- | -------------------------------------------- | ------------------------------------ |
+| `index-*.js` (~207 kB)  | Interface, motor (`@bpmn-flow/core`), estado | No carregamento da página            |
+| `dist-*.js` (~1,0 MB)   | `@bpmn-flow/viewer` + `bpmn-visualization`   | Ao carregar o primeiro diagrama      |
+| `editor-*.js` (~495 kB) | `bpmn-js` e o CSS do editor                  | Só quando o modo **Editar** é aberto |
+
+`src/diagram-view.ts` existe para isso: concentra o `import` do viewer (e o CSS
+dele) num módulo carregado por `import()`, o que faz o Vite emitir o chunk
+separado. O editor segue o mesmo caminho, por `import('./editor.js')` dentro de
+`ensureEditor()`.
+
+Quem abre a demo e só executa processos nunca baixa o editor.
