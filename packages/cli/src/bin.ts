@@ -88,7 +88,7 @@ async function main(): Promise<number> {
         ...(retries ? { retry: { attempts: Number(retries) } } : {}),
         ...(argv.includes('--js-expressions') ? { expressions: 'javascript' as const } : {}),
       };
-      const stored = stateFile ? ((await readFile(stateFile, 'utf8')) as string) : undefined;
+      const stored = stateFile ? await readFile(stateFile, 'utf8') : undefined;
 
       // More than one executable pool: run the whole collaboration, with the
       // message flows routed between the pools.

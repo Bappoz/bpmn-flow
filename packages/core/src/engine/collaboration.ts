@@ -376,7 +376,7 @@ export class CollaborationEngine {
     }
     for (const event of EVENT_NAMES) {
       engine.on(event, (payload) => {
-        this.emitter.emit(event, { processId, ...payload } as never);
+        this.emitter.emit(event, { processId, ...payload });
       });
     }
     return engine;

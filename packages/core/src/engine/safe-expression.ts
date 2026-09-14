@@ -282,7 +282,7 @@ class Parser {
     const isTypeof = token?.kind === 'name' && token.text === 'typeof';
     if (isTypeof || (token?.kind === 'punct' && ['!', '-', '+'].includes(token.text))) {
       this.at += 1;
-      return { type: 'unary', operator: token!.text as UnaryOperator, argument: this.unary() };
+      return { type: 'unary', operator: token.text as UnaryOperator, argument: this.unary() };
     }
     return this.postfix(this.primary());
   }

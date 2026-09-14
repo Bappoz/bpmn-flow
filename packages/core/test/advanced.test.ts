@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseBpmn, parseTimerCycle, WorkflowEngine } from '../src/index.js';
-import type { BpmnModel, ProcessModel } from '../src/index.js';
+import type { BpmnModel, EngineState, ProcessModel } from '../src/index.js';
 import {
   AD_HOC,
   AD_HOC_SEQUENTIAL,
@@ -14,6 +14,11 @@ const T0 = Date.parse('2026-08-19T12:00:00.000Z');
 
 async function process(xml: string): Promise<ProcessModel> {
   return (await parseBpmn(xml)).processes[0]!;
+}
+
+/** Round-trips the state through JSON, like a database or a queue would. */
+function persist(engine: WorkflowEngine): EngineState {
+  return JSON.parse(JSON.stringify(engine.getState())) as EngineState;
 }
 
 describe('throw events', () => {
@@ -180,7 +185,7 @@ describe('the new constructs survive a restart', () => {
     await first.start();
     await first.completeTask(first.tasks()[0]!.tokenId);
 
-    const second = WorkflowEngine.restore(p, JSON.parse(JSON.stringify(first.getState())));
+    const second = WorkflowEngine.restore(p, persist(first));
     expect(second.tasks()[0]?.nodeId).toBe('Item2');
 
     const snap = await second.completeTask(second.tasks()[0]!.tokenId);
@@ -199,8 +204,9 @@ describe('the new constructs survive a restart', () => {
     const started = await first.start();
     expect(started.status).toBe('waiting');
 
-    const state = JSON.parse(JSON.stringify(first.getState()));
-    const second = WorkflowEngine.restore(caller, state, { processes: model.processes });
+    const second = WorkflowEngine.restore(caller, persist(first), {
+      processes: model.processes,
+    });
     const pendente = second.tasks({ nodeId: 'Confirmar' })[0]!;
     const vistoDentro = pendente.variables;
 
@@ -222,9 +228,7 @@ describe('the new constructs survive a restart', () => {
     now = T0 + 3_600_000;
     await first.tick();
 
-    const second = WorkflowEngine.restore(p, JSON.parse(JSON.stringify(first.getState())), {
-      now: () => now,
-    });
+    const second = WorkflowEngine.restore(p, persist(first), { now: () => now });
     second.registerHandler('Cobrar', () => {
       cobrancas += 1;
     });

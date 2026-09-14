@@ -1,0 +1,52 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    # One PR per group keeps the review small: a patch bump of five dev tools is
+    # one decision, not five.
+    groups:
+      dev-tooling:
+        patterns:
+          - '@types/*'
+          - '@vitest/*'
+          - eslint
+          - '@eslint/*'
+          - typescript-eslint
+          - prettier
+          - typescript
+          - tsup
+          - vitest
+          - vite
+        update-types:
+          - minor
+          - patch
+      production:
+        patterns:
+          - '*'
+        exclude-patterns:
+          - '@types/*'
+          - '@vitest/*'
+          - eslint
+          - '@eslint/*'
+          - typescript-eslint
+          - prettier
+          - typescript
+          - tsup
+          - vitest
+          - vite
+        update-types:
+          - patch
+    commit-message:
+      prefix: 'chore(deps)'
+      prefix-development: 'chore(deps-dev)'
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: 'chore(ci)'

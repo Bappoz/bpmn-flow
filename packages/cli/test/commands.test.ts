@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseBpmn } from '@bpmn-flow/core';
+import { parseBpmn, type EngineState } from '@bpmn-flow/core';
 import { inspect, isCollaboration, run, runCollaboration, validate } from '../src/index.js';
 
 const ORDER = `<?xml version="1.0" encoding="UTF-8"?>
@@ -87,7 +87,7 @@ describe('run', () => {
 
   it('continues from a saved state', async () => {
     const first = await run(ORDER, { variables: { itens: ['a'] } });
-    const state = JSON.parse(JSON.stringify(first.state));
+    const state = JSON.parse(JSON.stringify(first.state)) as EngineState;
 
     const second = await run(ORDER, { state });
     expect(second.snapshot.status).toBe('waiting'); // same place, nothing lost

@@ -69,15 +69,29 @@ npm install
 npm run build
 ```
 
-Os pacotes ainda **não estão publicados no npm**. Para consumi-los em outro
-projeto hoje, use o repositório direto:
+Os pacotes ainda **não estão publicados no npm**. `npm install github:Bappoz/bpmn-flow`
+não serve: a raiz é o workspace do monorepo, é `private` e não exporta nada.
+
+Para consumir em outro projeto hoje, clone, builde e ligue o pacote que você
+quer:
 
 ```bash
-npm install github:Bappoz/bpmn-flow
+git clone https://github.com/Bappoz/bpmn-flow.git
+cd bpmn-flow
+npm ci                                  # instala e builda (script `prepare`)
+npm link -w @bpmn-flow/core             # e/ou viewer, server, cli
 ```
 
-Quando forem publicados, a instalação será por pacote (`@bpmn-flow/core`,
-`@bpmn-flow/viewer`).
+```bash
+cd ../seu-projeto
+npm link @bpmn-flow/core
+```
+
+Quando forem publicados, a instalação será por pacote:
+
+```bash
+npm install @bpmn-flow/core @bpmn-flow/viewer   # ainda não disponível
+```
 
 ## Início rápido: usar como biblioteca
 
@@ -567,6 +581,13 @@ createApp({ expressions: 'javascript' });
 - **DMN está fora de escopo**: `businessRuleTask` é o ponto de extensão — ligue
   um handler ao seu motor de decisão.
 
+## Contribuindo
+
+Fluxo, gate de qualidade e convenção de commit em
+[`CONTRIBUTING.md`](CONTRIBUTING.md). Vulnerabilidade não vai para issue
+pública: [`SECURITY.md`](SECURITY.md) explica o canal e o modelo de confiança
+das expressões BPMN.
+
 ## Desenvolvimento
 
 ```bash
@@ -579,7 +600,7 @@ npm run dev         # sobe o playground em modo de desenvolvimento
 ```
 
 ```bash
-npm run verify      # build + format + lint + typecheck + test, falhando no primeiro erro
+npm run verify      # build + format + lint + typecheck + coverage, falhando no primeiro erro
 ```
 
 `verify` é exatamente o que o CI roda, na mesma ordem — o build vem primeiro

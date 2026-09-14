@@ -1,0 +1,38 @@
+name: Funcionalidade
+description: Um elemento BPMN, uma API ou uma integração que falta.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: O problema
+      description: O que você não consegue fazer hoje. Caso concreto, não hipótese.
+    validations:
+      required: true
+
+  - type: textarea
+    id: spec
+    attributes:
+      label: O que a especificação diz
+      description: |
+        Para elemento BPMN: a seção da spec e o comportamento esperado. Veja o
+        que já é suportado em `docs/BPMN-STANDARD.md` antes de abrir.
+    validations:
+      required: false
+
+  - type: textarea
+    id: shape
+    attributes:
+      label: Como você imagina a API
+      description: Assinatura, opção de configuração, ou o XML que deveria funcionar.
+      render: typescript
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Escopo
+      options:
+        - label: Verifiquei que `docs/BPMN-STANDARD.md` não lista isso como divergência assumida
+        - label: Tenho interesse em implementar

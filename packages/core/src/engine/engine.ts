@@ -1036,7 +1036,7 @@ export class WorkflowEngine {
           return true;
         },
       },
-    ) as Record<string, unknown>;
+    );
   }
 
   // --- Run loop ----------------------------------------------------------
@@ -1439,8 +1439,8 @@ export class WorkflowEngine {
 
     if (loop.kind === 'multiInstance') {
       if (loop.collection) {
-        const collection = this.readVariable(scope, loop.collection);
-        if (!Array.isArray(collection)) {
+        const collection: unknown = this.readVariable(scope, loop.collection);
+        if (!isUnknownArray(collection)) {
           this.fail(
             new BpmnExecutionError(
               `Multi-instance collection "${loop.collection}" of ${node.id} is not an array.`,
@@ -2418,6 +2418,11 @@ function detailOfKind(node: FlowNode, kind: EventDefinitionKind): EventDetail | 
   return detailsOf(node).find((detail) => detail.kind === kind);
 }
 
+/** `Array.isArray` narrows to `any[]`; the engine never wants `any`. */
+function isUnknownArray(value: unknown): value is unknown[] {
+  return Array.isArray(value);
+}
+
 /**
  * Whether two correlation keys identify the same instance. Compared by value,
  * with a textual fallback: a key that travelled through a URL or a JSON body
@@ -2425,9 +2430,13 @@ function detailOfKind(node: FlowNode, kind: EventDefinitionKind): EventDetail | 
  */
 function sameCorrelationKey(a: unknown, b: unknown): boolean {
   if (a === b) return true;
-  if (a === null || b === null || a === undefined || b === undefined) return false;
-  if (typeof a === 'object' || typeof b === 'object') return false;
-  return String(a) === String(b);
+  return isKeyLiteral(a) && isKeyLiteral(b) && String(a) === String(b);
+}
+
+/** A correlation key only compares as text when it is a primitive. */
+function isKeyLiteral(value: unknown): value is string | number | bigint | boolean {
+  const type = typeof value;
+  return type === 'string' || type === 'number' || type === 'bigint' || type === 'boolean';
 }
 
 /** Timers are unique per (token, timer node) pair. */

@@ -220,11 +220,7 @@ export function inferValue(name: string, expression: string, want = true): unkno
 }
 
 /** Infers a value that satisfies the expression, from its shape. */
-function suggestFor(
-  name: string,
-  kind: VariableUsage['kind'],
-  expressions: string[],
-): unknown | undefined {
+function suggestFor(name: string, kind: VariableUsage['kind'], expressions: string[]): unknown {
   if (kind === 'collection') return ['item-1', 'item-2'];
   for (const expression of expressions) {
     const value = inferValue(name, expression);

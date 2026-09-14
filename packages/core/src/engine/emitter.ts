@@ -9,9 +9,9 @@ export class Emitter<Events extends Record<string, unknown>> {
 
   on<K extends keyof Events>(event: K, listener: Listener<Events[K]>): () => void {
     const set = this.listeners.get(event) ?? new Set();
-    set.add(listener as Listener<never>);
+    set.add(listener);
     this.listeners.set(event, set);
-    return () => set.delete(listener as Listener<never>);
+    return () => set.delete(listener);
   }
 
   emit<K extends keyof Events>(event: K, payload: Events[K]): void {

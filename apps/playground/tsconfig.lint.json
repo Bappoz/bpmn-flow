@@ -1,0 +1,13 @@
+{
+  // Adds the tests and the tooling configs to what the linter type-checks;
+  // tsconfig.json stays the build program (src only, under rootDir).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "rootDir": "."
+  },
+  "include": ["src", "test", "*.ts"]
+}
