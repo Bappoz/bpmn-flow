@@ -1,3 +1,4 @@
+import type { ExpressionMode } from './expression.js';
 import type { EngineMode, ExecutionStatus, HistoryEntry, WaitReason } from './types.js';
 
 /**
@@ -14,7 +15,7 @@ import type { EngineMode, ExecutionStatus, HistoryEntry, WaitReason } from './ty
  *
  * Bump {@link ENGINE_STATE_VERSION} whenever the shape changes.
  */
-export const ENGINE_STATE_VERSION = 9;
+export const ENGINE_STATE_VERSION = 10;
 
 /** Where a token currently sits, since not every token lives in a scope. */
 export type TokenPlacement =
@@ -134,6 +135,12 @@ export interface EngineState {
   processId: string;
   status: ExecutionStatus;
   mode: EngineMode;
+  /**
+   * How the diagram's expressions are evaluated. Part of the state because it
+   * decides which flow a gateway takes: restoring without it would silently
+   * re-route a running execution.
+   */
+  expressions: ExpressionMode;
   maxSteps: number;
   steps: number;
   variables: Record<string, unknown>;
