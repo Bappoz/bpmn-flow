@@ -93,6 +93,27 @@ function readCorrelationKey(...sources: (MdExtensionElements | undefined)[]): st
   return undefined;
 }
 
+/**
+ * The job a worker outside the engine performs, in the two conventions real
+ * tools emit: `<zeebe:taskDefinition type="charge" retries="2"/>` under
+ * `extensionElements`, and Camunda 7's `camunda:type="external"` with
+ * `camunda:topic`. Anything else is not a job, and the activity keeps the
+ * behaviour it has today.
+ */
+function readJob(el: MdElement): FlowNode['job'] {
+  for (const value of el.extensionElements?.values ?? []) {
+    if (!value.$type?.endsWith(':taskDefinition')) continue;
+    const type = value.type?.trim();
+    if (!type) continue;
+    const retries = Number(value.retries);
+    return Number.isInteger(retries) && retries >= 0 ? { type, retries } : { type };
+  }
+  const attrs = el.$attrs ?? {};
+  if (attrs['camunda:type'] !== 'external') return undefined;
+  const topic = attrs['camunda:topic']?.trim();
+  return topic ? { type: topic } : undefined;
+}
+
 /** Every `extensionElements` a catch event can hang a correlation key on. */
 function correlationSources(el: MdElement): (MdExtensionElements | undefined)[] {
   return [
@@ -286,6 +307,8 @@ function readScope(elements: MdElement[]): ScopeAccumulator {
     if (loop) node.loop = loop;
     const candidates = readCandidates(el.resources);
     if (candidates.length > 0) node.candidates = candidates;
+    const job = readJob(el);
+    if (job) node.job = job;
     const message = el.messageRef?.name ?? el.messageRef?.id;
     if (message) node.messageRef = message;
     const correlationKey = readCorrelationKey(...correlationSources(el));

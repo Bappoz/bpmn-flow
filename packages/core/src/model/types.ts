@@ -154,6 +154,13 @@ export interface FlowNode {
    * `bpmn:potentialOwner` / `bpmn:performer`.
    */
   candidates?: string[];
+
+  /**
+   * Work handed to something outside the engine: the activity parks until a
+   * worker completes it. Read from `zeebe:taskDefinition` or from Camunda 7's
+   * `camunda:type="external"`, so a diagram authored in either tool runs here.
+   */
+  job?: { type: string; retries?: number };
 }
 
 /**
