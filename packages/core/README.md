@@ -166,9 +166,12 @@ Métodos:
 - `tasks(filter?)`: trabalho pendente (tarefa de usuário, receive task, evento
   de captura, incidente) com raia, papéis e variáveis visíveis; filtra por
   `role`, `reason` e `nodeId`.
-- `incidentList()`: atividades cujo handler falhou, com mensagem e tentativas.
+- `incidentList()`: atividades cujo handler falhou, com mensagem e tentativas
+  (não inclui uma já reenfileirada para outra tentativa).
 - `retryTask(tokenId)` / `resolveIncident(tokenId, output?)`: roda de novo ou
   segue em frente.
+- `failJob(tokenId, error)`: um worker reporta que o job não pôde ser feito —
+  ver [Job externo](#job-externo).
 - `metrics()`: tempo total/médio/máximo por atividade, do mais lento para o mais
   rápido.
 - `tick(now?)`: dispara os timers vencidos e continua a execução.
@@ -179,6 +182,9 @@ Métodos:
 Reconstrói um motor a partir de um `EngineState` produzido por `getState()`,
 para retomar depois de um restart. O modelo do processo precisa ser o mesmo;
 handlers e listeners não são serializados e devem ser registrados de novo.
+Também aceita `onHandlerError` e `retry`: nenhum dos dois faz parte de
+`EngineState`, então quem restaura sem repassá-los volta com o motor no padrão
+`'fail'` e sem tentativas automáticas.
 
 ```ts
 const state = engine.getState();
@@ -214,6 +220,28 @@ engine.registerHandler('serviceTask', async (ctx) => {
 
 Retornar um objeto mescla valores nas variáveis. Lançar `BpmnError(code)`
 dispara um error boundary event correspondente.
+
+### Job externo
+
+Uma service task, send task ou outra atividade automática marcada no diagrama
+como job externo (`zeebe:taskDefinition` sob `extensionElements`, com `type` e
+`retries` opcional; ou `camunda:type="external"` com `camunda:topic` do
+Camunda 7) espera um worker fora do processo em vez de passar direto. A
+marcação aparece em `FlowNode.job` e a fila do worker em `PendingTask.job`;
+`engine.tasks({ reason: 'job' })` lista o trabalho pendente. Um
+`registerHandler` no próprio nó continua ganhando da espera por job — dubla um
+worker sem subir infraestrutura para testar.
+
+```ts
+const [job] = engine.tasks({ reason: 'job' });
+// worker processa job.variables e reporta de volta:
+await engine.failJob(job.tokenId, new BpmnError('PAGAMENTO_RECUSADO'));
+// ou, em caso de sucesso, completeTask(job.tokenId, { ... })
+```
+
+`failJob(tokenId, error)` segue o mesmo caminho que um handler que lança:
+`BpmnError` dispara o error boundary event correspondente; qualquer outro erro
+entra em retry/incidente conforme `onHandlerError` e `retry`.
 
 ## Padrões suportados
 
