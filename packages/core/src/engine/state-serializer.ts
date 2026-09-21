@@ -48,7 +48,13 @@ export interface EngineMeta {
   maxSteps: number;
   steps: number;
   tokenSeq: number;
-  /** Incidents still holding a token, which is what `incidentList()` answers. */
+  /**
+   * Every incident the engine is tracking, including retry bookkeeping for a
+   * token that is no longer parked as an incident (e.g. one handed back to a
+   * worker for another attempt) — losing that would restart its retry budget
+   * on restore. `incidentList()` answers a narrower question: what is holding
+   * a token right now.
+   */
   openIncidents: IncidentState[];
 }
 

@@ -3,6 +3,10 @@ import { BpmnError, ENGINE_STATE_VERSION, WorkflowEngine, parseBpmn } from '../s
 import type { ProcessModel } from '../src/index.js';
 import { EXTERNAL_JOB, EXTERNAL_JOB_C7, JOB_WITH_BOUNDARY, LINEAR } from './fixtures.js';
 
+function incidentFor(eng: WorkflowEngine, tokenId: string) {
+  return eng.getState().incidents.find((incident) => incident.tokenId === tokenId);
+}
+
 async function process(xml: string): Promise<ProcessModel> {
   return (await parseBpmn(xml)).processes[0]!;
 }
@@ -110,6 +114,14 @@ describe('worker reporting a failure', () => {
     await expect(eng.failJob('nope', new Error('x'))).rejects.toThrow(/No job for token/);
   });
 
+  it('refuses a token parked for a different reason', async () => {
+    const eng = new WorkflowEngine(await process(LINEAR));
+    await eng.start();
+    const [task] = eng.tasks({ reason: 'userTask' });
+
+    await expect(eng.failJob(task!.tokenId, new Error('x'))).rejects.toThrow(/No job for token/);
+  });
+
   it('fires the error boundary when the worker sends a BpmnError', async () => {
     const eng = new WorkflowEngine(await process(JOB_WITH_BOUNDARY));
     await eng.start();
@@ -133,5 +145,54 @@ describe('worker reporting a failure', () => {
 
     // Without the widening, the restored engine would fall back to 'fail' and kill the instance.
     expect(revived.incidentList()).toMatchObject([{ message: 'gateway timeout' }]);
+  });
+
+  it('falls back to "fail" on restore when the host omits onHandlerError', async () => {
+    const model = await parseBpmn(EXTERNAL_JOB);
+    const eng = new WorkflowEngine(model.processes[0]!);
+    await eng.start();
+
+    const revived = WorkflowEngine.restore(model.processes[0]!, eng.getState());
+    const [task] = revived.tasks({ reason: 'job' });
+    const snap = await revived.failJob(task!.tokenId, new Error('gateway timeout'));
+
+    expect(snap.status).toBe('failed');
+    expect(revived.incidentList()).toHaveLength(0);
+  });
+
+  it('keeps the retry budget across a restore, so it can still exhaust', async () => {
+    const model = await parseBpmn(EXTERNAL_JOB);
+    const opts = { onHandlerError: 'incident' as const, retry: { attempts: 1 } };
+    const eng = new WorkflowEngine(model.processes[0]!, opts);
+    await eng.start();
+    const [first] = eng.tasks({ reason: 'job' });
+    await eng.failJob(first!.tokenId, new Error('gateway timeout'));
+
+    // One attempt already spent; the host round-trips the engine through the
+    // journal before the next command, as it does for every command.
+    const revived = WorkflowEngine.restore(model.processes[0]!, eng.getState(), opts);
+    const [second] = revived.tasks({ reason: 'job' });
+    const snap = await revived.failJob(second!.tokenId, new Error('gateway timeout again'));
+
+    // The budget was not reset by the round trip: this second failure opens
+    // the incident instead of granting a fresh attempt.
+    expect(snap.status).toBe('waiting');
+    expect(revived.incidentList()).toMatchObject([{ nodeId: 'Charge', attempts: 2 }]);
+    expect(revived.tasks({ reason: 'job' })).toHaveLength(0);
+  });
+
+  it('drops the incident bookkeeping once the job succeeds', async () => {
+    const eng = new WorkflowEngine(await process(EXTERNAL_JOB), {
+      onHandlerError: 'incident',
+      retry: { attempts: 1 },
+    });
+    await eng.start();
+    const [first] = eng.tasks({ reason: 'job' });
+    await eng.failJob(first!.tokenId, new Error('gateway timeout'));
+    const [retried] = eng.tasks({ reason: 'job' });
+
+    await eng.completeTask(retried!.tokenId, { authorized: true });
+
+    expect(incidentFor(eng, retried!.tokenId)).toBeUndefined();
   });
 });

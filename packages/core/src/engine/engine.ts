@@ -182,6 +182,7 @@ export class WorkflowEngine {
     if (output) this.assignVariables(token.scope, output);
     this.waiting.delete(tokenId);
     token.waiting = undefined;
+    this.incidents.delete(tokenId);
     this.completeNode(token);
     this.leaveViaOutgoing(token);
     await this.drain();
@@ -501,7 +502,7 @@ export class WorkflowEngine {
       maxSteps: this.maxSteps,
       steps: this.steps,
       tokenSeq: this.tokenSeq,
-      openIncidents: this.incidentList(),
+      openIncidents: [...this.incidents.values()],
     });
   }
 
