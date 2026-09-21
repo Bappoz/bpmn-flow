@@ -12,6 +12,8 @@ export type WaitReason =
   | 'catchEvent'
   | 'eventBasedGateway'
   | 'boundary'
+  /** Work an outside worker performs: the activity holds until it reports back. */
+  | 'job'
   /** The activity's handler failed and the execution is holding, not dead. */
   | 'incident';
 
@@ -39,6 +41,8 @@ export interface PendingTask {
   lane?: string;
   /** Roles/people from `bpmn:potentialOwner`. Empty means anyone. */
   candidates: string[];
+  /** Present when the activity is an external job: the worker queue it belongs to. */
+  job?: { type: string };
   /** Variables visible to the activity (its scope chain, flattened). */
   variables: Record<string, unknown>;
 }

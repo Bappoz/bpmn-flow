@@ -282,6 +282,7 @@ export class WorkflowEngine {
         variables: this.mergedVariables(token.scope),
         ...(node.name ? { name: node.name } : {}),
         ...(node.lane ? { lane: node.lane } : {}),
+        ...(node.job ? { job: { type: node.job.type } } : {}),
       };
       if (!matchesFilter(task, filter)) continue;
       tasks.push(task);
@@ -843,6 +844,12 @@ export class WorkflowEngine {
     if (!handler) {
       if (isWaitTask) {
         this.park(token, node.kind === 'receiveTask' ? 'receiveTask' : 'userTask');
+        return;
+      }
+      // Declared as an external job: hold until a worker reports back. A local
+      // handler still wins, which is what lets a test double one out.
+      if (node.job) {
+        this.park(token, 'job');
         return;
       }
       // Unhandled automatic task: pass straight through.
