@@ -12,7 +12,12 @@ export interface MdRef {
 
 /** Anything a tool put under `bpmn:extensionElements`, attributes included. */
 export interface MdExtensionElements {
-  values?: (MdRef & { correlationKey?: string })[];
+  values?: (MdRef & {
+    correlationKey?: string;
+    /** `zeebe:taskDefinition`: the worker queue and the retry count. */
+    type?: string;
+    retries?: string;
+  })[];
 }
 
 export interface MdEventDefinition {
@@ -118,6 +123,8 @@ export interface MdElement {
   messageRef?: MdRef & { name?: string; extensionElements?: MdExtensionElements };
   /** Extensions a tool attached to the element. */
   extensionElements?: MdExtensionElements;
+  /** Attributes from namespaces the moddle does not know, prefix included. */
+  $attrs?: Record<string, string>;
 
   /** Ad-hoc subprocess: when its activities are considered done. */
   completionCondition?: { body?: string };

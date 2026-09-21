@@ -182,6 +182,7 @@ export class WorkflowEngine {
     if (output) this.assignVariables(token.scope, output);
     this.waiting.delete(tokenId);
     token.waiting = undefined;
+    this.incidents.delete(tokenId);
     this.completeNode(token);
     this.leaveViaOutgoing(token);
     await this.drain();
@@ -282,6 +283,7 @@ export class WorkflowEngine {
         variables: this.mergedVariables(token.scope),
         ...(node.name ? { name: node.name } : {}),
         ...(node.lane ? { lane: node.lane } : {}),
+        ...(node.job ? { job: { type: node.job.type } } : {}),
       };
       if (!matchesFilter(task, filter)) continue;
       tasks.push(task);
@@ -343,7 +345,9 @@ export class WorkflowEngine {
 
   /** Activities whose handler failed and are holding, newest failure first. */
   incidentList(): IncidentState[] {
-    return [...this.incidents.values()].filter((incident) => this.waiting.has(incident.tokenId));
+    return [...this.incidents.values()].filter(
+      (incident) => this.waiting.get(incident.tokenId)?.waiting === 'incident',
+    );
   }
 
   /** Runs a failed activity again, from the incident it left behind. */
@@ -356,6 +360,34 @@ export class WorkflowEngine {
     token.waiting = undefined;
     this.clearTimersFor(tokenId);
     this.ready.push(token);
+    await this.drain();
+    return this.snapshot();
+  }
+
+  /**
+   * A worker reports the job it took could not be done. Routed through the same
+   * path a throwing handler takes, so retries, incidents and error boundary
+   * events mean exactly what they mean in-process.
+   */
+  async failJob(tokenId: string, error: Error): Promise<ExecutionSnapshot> {
+    const token = this.waiting.get(tokenId);
+    if (!token || token.waiting !== 'job') {
+      throw new BpmnExecutionError(`No job for token: ${tokenId}`);
+    }
+    const node = token.scope.graph.node(token.nodeId);
+    if (!node) throw new BpmnExecutionError(`No job for token: ${tokenId}`);
+
+    this.waiting.delete(tokenId);
+    token.waiting = undefined;
+    if (error instanceof BpmnError) {
+      this.emitter.emit('activity.end', { nodeId: node.id, tokenId: token.id });
+      this.discard(token);
+      if (!this.raiseErrorOnActivity(token.scope, node.id, error.code)) {
+        if (!this.raiseErrorOnEventSubProcess(error.code)) this.fail(error);
+      }
+    } else {
+      this.handleFailure(token, node, error);
+    }
     await this.drain();
     return this.snapshot();
   }
@@ -470,7 +502,7 @@ export class WorkflowEngine {
       maxSteps: this.maxSteps,
       steps: this.steps,
       tokenSeq: this.tokenSeq,
-      openIncidents: this.incidentList(),
+      openIncidents: [...this.incidents.values()],
     });
   }
 
@@ -500,12 +532,18 @@ export class WorkflowEngine {
    * execution can survive a restart or move between processes.
    *
    * The process model must be the same one the state was produced from.
-   * Re-register handlers and listeners before resuming.
+   * Re-register handlers and listeners before resuming. Failure policies
+   * (`onHandlerError`, `retry`) are not part of the serialized state either —
+   * the host must pass them back in, the same way it does for `mode` and
+   * `expressions`.
    */
   static restore(
     process: ProcessModel,
     state: EngineState,
-    options: Pick<EngineOptions, 'mode' | 'maxSteps' | 'processes' | 'now' | 'expressions'> = {},
+    options: Pick<
+      EngineOptions,
+      'mode' | 'maxSteps' | 'processes' | 'now' | 'expressions' | 'onHandlerError' | 'retry'
+    > = {},
   ): WorkflowEngine {
     if (state.version !== ENGINE_STATE_VERSION) {
       throw new BpmnValidationError(
@@ -524,6 +562,8 @@ export class WorkflowEngine {
       variables: state.variables,
       ...(options.processes ? { processes: options.processes } : {}),
       ...(options.now ? { now: options.now } : {}),
+      ...(options.onHandlerError ? { onHandlerError: options.onHandlerError } : {}),
+      ...(options.retry ? { retry: options.retry } : {}),
     });
     engine.hydrate(state);
     return engine;
@@ -843,6 +883,12 @@ export class WorkflowEngine {
     if (!handler) {
       if (isWaitTask) {
         this.park(token, node.kind === 'receiveTask' ? 'receiveTask' : 'userTask');
+        return;
+      }
+      // Declared as an external job: hold until a worker reports back. A local
+      // handler still wins, which is what lets a test double one out.
+      if (node.job) {
+        this.park(token, 'job');
         return;
       }
       // Unhandled automatic task: pass straight through.

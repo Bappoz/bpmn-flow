@@ -1119,3 +1119,53 @@ export const COLLABORATION_TWO_POOLS = `<?xml version="1.0" encoding="UTF-8"?>
     <bpmn:sequenceFlow id="l4" sourceRef="Confirmar" targetRef="L2" />
   </bpmn:process>
 </bpmn:definitions>`;
+
+/** Service task marcada como job externo na convenção do Zeebe/Camunda 8. */
+export const EXTERNAL_JOB = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions ${NS} xmlns:zeebe="http://camunda.org/schema/zeebe/1.0" id="Defs">
+  <bpmn:process id="P" isExecutable="true">
+    <bpmn:startEvent id="Start" />
+    <bpmn:serviceTask id="Charge" name="Charge card">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="charge" retries="2" />
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="End" />
+    <bpmn:sequenceFlow id="f1" sourceRef="Start" targetRef="Charge" />
+    <bpmn:sequenceFlow id="f2" sourceRef="Charge" targetRef="End" />
+  </bpmn:process>
+</bpmn:definitions>`;
+
+/** A mesma coisa na convenção do Camunda 7: atributos no próprio elemento. */
+export const EXTERNAL_JOB_C7 = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions ${NS} xmlns:camunda="http://camunda.org/schema/1.0/bpmn" id="Defs">
+  <bpmn:process id="P" isExecutable="true">
+    <bpmn:startEvent id="Start" />
+    <bpmn:serviceTask id="Charge" camunda:type="external" camunda:topic="charge" />
+    <bpmn:endEvent id="End" />
+    <bpmn:sequenceFlow id="f1" sourceRef="Start" targetRef="Charge" />
+    <bpmn:sequenceFlow id="f2" sourceRef="Charge" targetRef="End" />
+  </bpmn:process>
+</bpmn:definitions>`;
+
+/** An external job with an error boundary, so a worker can report a business error. */
+export const JOB_WITH_BOUNDARY = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions ${NS} xmlns:zeebe="http://camunda.org/schema/zeebe/1.0" id="Defs">
+  <bpmn:process id="P" isExecutable="true">
+    <bpmn:startEvent id="Start" />
+    <bpmn:serviceTask id="Charge" name="Charge card">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="charge" />
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:boundaryEvent id="OnDeclined" attachedToRef="Charge">
+      <bpmn:errorEventDefinition errorRef="Declined" />
+    </bpmn:boundaryEvent>
+    <bpmn:endEvent id="End" />
+    <bpmn:endEvent id="Declined" />
+    <bpmn:sequenceFlow id="f1" sourceRef="Start" targetRef="Charge" />
+    <bpmn:sequenceFlow id="f2" sourceRef="Charge" targetRef="End" />
+    <bpmn:sequenceFlow id="f3" sourceRef="OnDeclined" targetRef="Declined" />
+  </bpmn:process>
+  <bpmn:error id="Declined" name="Declined" errorCode="DECLINED" />
+</bpmn:definitions>`;
