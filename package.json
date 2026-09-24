@@ -35,7 +35,7 @@
     "release:dry": "npm publish --workspaces --dry-run --if-present"
   },
   "devDependencies": {
-    "@changesets/cli": "3.0.2",
+    "@changesets/cli": "3.0.3",
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.6.1",
     "@vitest/coverage-v8": "^5.0.1",

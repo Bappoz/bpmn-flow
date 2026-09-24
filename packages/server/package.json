@@ -51,6 +51,6 @@
   "dependencies": {
     "@bpmn-flow/core": "^0.1.0",
     "@hono/node-server": "^2.0.8",
-    "hono": "^4.12.30"
+    "hono": "^4.13.8"
   }
 }
