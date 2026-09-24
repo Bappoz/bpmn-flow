@@ -132,6 +132,21 @@ describe('worker reporting a failure', () => {
     expect(snap.completedNodes).toContain('Declined');
   });
 
+  it('does not end an activity it never reported as started', async () => {
+    const eng = new WorkflowEngine(await process(JOB_WITH_BOUNDARY));
+    const events: string[] = [];
+    eng.on('activity.start', ({ nodeId }) => events.push(`start:${nodeId}`));
+    eng.on('activity.end', ({ nodeId }) => events.push(`end:${nodeId}`));
+    await eng.start();
+    const [task] = eng.tasks({ reason: 'job' });
+
+    await eng.failJob(task!.tokenId, new BpmnError('DECLINED'));
+
+    // A parked job never emits activity.start, so an activity.end here would
+    // tell a viewer the task completed when it was in fact interrupted.
+    expect(events.filter((event) => event.endsWith(':Charge'))).toEqual([]);
+  });
+
   it('restores with the failure policy the host passes in', async () => {
     const model = await parseBpmn(EXTERNAL_JOB);
     const eng = new WorkflowEngine(model.processes[0]!, { onHandlerError: 'incident' });
