@@ -380,7 +380,8 @@ export class WorkflowEngine {
     this.waiting.delete(tokenId);
     token.waiting = undefined;
     if (error instanceof BpmnError) {
-      this.emitter.emit('activity.end', { nodeId: node.id, tokenId: token.id });
+      // No activity.end: a job parks without activity.start, and the error
+      // interrupts the activity rather than completing it.
       this.discard(token);
       if (!this.raiseErrorOnActivity(token.scope, node.id, error.code)) {
         if (!this.raiseErrorOnEventSubProcess(error.code)) this.fail(error);
