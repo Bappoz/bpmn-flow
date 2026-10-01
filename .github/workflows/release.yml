@@ -38,7 +38,7 @@ jobs:
       #  - pending changesets  -> opens/updates the "Version Packages" PR
       #  - none (PR was merged) -> publishes the versions in package.json and tags
       - name: Version or publish
-        uses: changesets/action@v1
+        uses: changesets/action@v2
         with:
           version: npm run version-packages
           publish: npm run release
