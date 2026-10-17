@@ -1,6 +1,6 @@
 {
   "name": "@bpmn-flow/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Command line for BPMN Flow: validate, inspect and run BPMN 2.0 processes from the terminal.",
   "type": "module",
   "license": "MIT",
@@ -47,6 +47,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@bpmn-flow/core": "^0.1.0"
+    "@bpmn-flow/core": "^0.2.0"
   }
 }

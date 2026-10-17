@@ -1,6 +1,6 @@
 {
   "name": "@bpmn-flow/core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "BPMN 2.0 parser and token-based execution engine. Isomorphic (Node and browser), zero runtime UI dependencies.",
   "type": "module",
   "license": "MIT",

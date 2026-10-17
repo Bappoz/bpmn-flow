@@ -1,6 +1,6 @@
 {
   "name": "@bpmn-flow/editor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Browser BPMN 2.0 modeler with layout support and structural validation.",
   "type": "module",
   "license": "MIT",
@@ -49,8 +49,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@bpmn-flow/core": "^0.1.0",
-    "@bpmn-flow/viewer": "^0.1.0",
+    "@bpmn-flow/core": "^0.2.0",
+    "@bpmn-flow/viewer": "^0.2.0",
     "bpmn-js": "^18.28.0"
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "@bpmn-flow/viewer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Interactive BPMN viewer that overlays live @bpmn-flow/core execution state on a bpmn-visualization diagram.",
   "type": "module",
   "license": "MIT",
@@ -51,7 +51,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@bpmn-flow/core": "^0.1.0",
+    "@bpmn-flow/core": "^0.2.0",
     "bpmn-auto-layout": "^1.3.0",
     "bpmn-visualization": "^0.48.0"
   }
