@@ -1,4 +1,5 @@
 import { validateBpmn, type ValidationResult } from '@bpmn-flow/core';
+import type { ElementLike } from 'diagram-js/lib/model/Types.js';
 import { ensureLayout } from '@bpmn-flow/viewer';
 import BpmnModeler from 'bpmn-js/lib/Modeler';
 
@@ -22,6 +23,15 @@ const BLANK = `<?xml version="1.0" encoding="UTF-8"?>
 
 interface Canvas {
   zoom(mode: string): void;
+  scrollToElement(element: ElementLike): void;
+}
+
+interface ElementRegistry {
+  get(id: string): ElementLike | undefined;
+}
+
+interface Selection {
+  select(element: ElementLike): void;
 }
 
 /**
@@ -68,6 +78,15 @@ export class BpmnEditor {
   onChange(listener: () => void): () => void {
     this.modeler.on('commandStack.changed', listener);
     return () => this.modeler.off('commandStack.changed', listener);
+  }
+
+  /** Scrolls to and selects an element by BPMN id. Returns false if absent. */
+  focusElement(id: string): boolean {
+    const element = this.modeler.get<ElementRegistry>('elementRegistry').get(id);
+    if (!element) return false;
+    this.modeler.get<Canvas>('canvas').scrollToElement(element);
+    this.modeler.get<Selection>('selection').select(element);
+    return true;
   }
 
   /** Fits the modeler canvas to its current viewport. */

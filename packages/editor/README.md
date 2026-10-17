@@ -10,6 +10,7 @@ import '@bpmn-flow/editor/styles.css';
 const editor = new BpmnEditor(document.querySelector('#editor')!);
 await editor.open(xml);
 const result = await editor.validate();
+editor.focusElement(result.issues[0]?.nodeId ?? 'Task_1');
 const formattedXml = await editor.getXml();
 const stopListening = editor.onChange(() => markDirty());
 stopListening(); // call when the editor view is removed
@@ -19,3 +20,5 @@ stopListening(); // call when the editor view is removed
 modify the caller's source string; save only the XML returned by `getXml()`.
 `newDiagram()` creates a valid process with a start event. Call `destroy()` when
 the host removes the editor so bpmn-js can release its resources.
+`focusElement(id)` scrolls to and selects an element, returning `false` when the
+id is absent from the current diagram.
