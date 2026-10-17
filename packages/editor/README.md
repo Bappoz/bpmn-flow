@@ -11,6 +11,8 @@ const editor = new BpmnEditor(document.querySelector('#editor')!);
 await editor.open(xml);
 const result = await editor.validate();
 const formattedXml = await editor.getXml();
+const stopListening = editor.onChange(() => markDirty());
+stopListening(); // call when the editor view is removed
 ```
 
 `open()` computes diagram interchange when the input has none. It does not
