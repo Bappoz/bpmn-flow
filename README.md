@@ -36,12 +36,13 @@ que o motor implementa.
 
 ## Arquitetura
 
-O repositório é um monorepo (npm workspaces) com quatro módulos:
+O repositório é um monorepo (npm workspaces) com cinco pacotes e um playground:
 
 | Pacote                  | Responsabilidade                                                             | Ambiente       |
 | ----------------------- | ---------------------------------------------------------------------------- | -------------- |
 | `@bpmn-flow/core`       | Parser BPMN 2.0, modelo normalizado e motor de execução por tokens.          | Node e browser |
 | `@bpmn-flow/viewer`     | Renderização interativa sobre `bpmn-visualization` com overlays de execução. | Browser        |
+| `@bpmn-flow/editor`     | Edição BPMN com `bpmn-js`, auto-layout e validação estrutural pelo core.     | Browser        |
 | `@bpmn-flow/server`     | API REST sobre o `core` e host estático para servir uma UI numa porta.       | Node           |
 | `@bpmn-flow/cli`        | `bpmn-flow validate/inspect/run` para usar o motor no terminal.              | Node           |
 | `@bpmn-flow/playground` | Aplicação Vite para carregar, visualizar e executar processos no navegador.  | Browser        |
@@ -436,8 +437,17 @@ a execução roda no navegador), só o botão "Salvar no repositório" precisa d
 servidor. Para ligar: **Settings → Pages → Source: GitHub Actions**. A partir
 daí o endereço é `https://<usuário>.github.io/<repo>/`.
 
-No modo **editar**, o diagrama é criado com `bpmn-js`, validado pelo
-`@bpmn-flow/core` e pode ser salvo no diretório de exemplos do servidor:
+No modo **editar**, o playground usa `@bpmn-flow/editor`, validado pelo
+`@bpmn-flow/core`, e pode salvar o diagrama no diretório de exemplos do servidor.
+Outras aplicações podem importar o mesmo modeler e seus estilos:
+
+```ts
+import { BpmnEditor } from '@bpmn-flow/editor';
+import '@bpmn-flow/editor/styles.css';
+```
+
+O host escolhe o XML, persiste o resultado de `getXml()` e chama `destroy()` ao
+fechar a área de edição.
 
 ![Editor com o resultado da validação estrutural](docs/media/editor-validacao.png)
 
