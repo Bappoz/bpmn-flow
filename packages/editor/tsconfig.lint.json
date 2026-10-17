@@ -1,0 +1,13 @@
+{
+  // Include package tooling in the lint program while keeping the build program
+  // limited to browser source files under src/.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "rootDir": "."
+  },
+  "include": ["src", "test", "*.ts"]
+}

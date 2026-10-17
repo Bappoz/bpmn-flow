@@ -14,6 +14,8 @@ export default defineConfig({
         // argv/process wiring around the tested command functions.
         '**/src/bin.ts',
         'packages/server/src/index.ts',
+        // Browser-only bpmn-js/DOM wiring has no DOM test harness.
+        'packages/editor/src/index.ts',
         // Browser wiring: DOM nodes, file inputs, fetch and a bpmn-js modeler.
         // The logic worth testing was extracted to apps/playground/src/guided.ts,
         // which is the one playground module that stays in.
