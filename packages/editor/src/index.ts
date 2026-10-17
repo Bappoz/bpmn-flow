@@ -61,6 +61,15 @@ export class BpmnEditor {
     return validateBpmn(await this.getXml());
   }
 
+  /**
+   * Subscribes to user edits, including undo and redo. Returns an unsubscribe
+   * function so the host can clean up when its editing surface is removed.
+   */
+  onChange(listener: () => void): () => void {
+    this.modeler.on('commandStack.changed', listener);
+    return () => this.modeler.off('commandStack.changed', listener);
+  }
+
   /** Fits the modeler canvas to its current viewport. */
   fit(): void {
     this.modeler.get<Canvas>('canvas').zoom('fit-viewport');
